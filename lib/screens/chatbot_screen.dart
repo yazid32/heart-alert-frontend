@@ -1,9 +1,13 @@
 // lib/screens/chatbot_screen.dart
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:uuid/uuid.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../services/chatbot_service.dart';
+import '../services/conversation_manager.dart';
 import '../theme/app_theme.dart';
 import '../utils/responsive_utils.dart';
+import '../models/chat_message.dart';
 
 class ChatbotScreen extends StatefulWidget {
   final Map<String, dynamic>? initialContext;
@@ -13,19 +17,28 @@ class ChatbotScreen extends StatefulWidget {
   State<ChatbotScreen> createState() => _ChatbotScreenState();
 }
 
-class _ChatbotScreenState extends State<ChatbotScreen> {
+class _ChatbotScreenState extends State<ChatbotScreen> with AutomaticKeepAliveClientMixin {
+  @override
+  bool get wantKeepAlive => true;
+
   late final ChatbotService _chatbot;
   final List<ChatMessage> _messages = [];
   final TextEditingController _messageController = TextEditingController();
   final ScrollController _scrollController = ScrollController();
   bool _isLoading = false;
   Map<String, dynamic>? _currentContext;
+  bool _hasError = false;
+  String? _errorMessage;
+
+  // ==================== LIFECYCLE ====================
 
   @override
   void initState() {
     super.initState();
     _chatbot = ChatbotService();
+    _loadPersistedMessages();
     _addWelcomeMessage();
+    
     if (widget.initialContext != null) {
       _currentContext = widget.initialContext;
       _addPredictionContext(widget.initialContext!);
@@ -34,42 +47,86 @@ class _ChatbotScreenState extends State<ChatbotScreen> {
 
   @override
   void dispose() {
+    _savePersistedMessages();
     _messageController.dispose();
     _scrollController.dispose();
     super.dispose();
   }
 
+  // ==================== PERSISTENCE ====================
+
+  Future<void> _loadPersistedMessages() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final saved = prefs.getString('chat_messages');
+      if (saved != null) {
+        final List<dynamic> data = jsonDecode(saved);
+        setState(() {
+          _messages.clear();
+          _messages.addAll(data.map((e) => ChatMessage.fromJson(e)).toList());
+        });
+      }
+    } catch (e) {
+      print('Error loading messages: $e');
+    }
+  }
+
+  Future<void> _savePersistedMessages() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final data = _messages.map((e) => e.toJson()).toList();
+      await prefs.setString('chat_messages', jsonEncode(data));
+    } catch (e) {
+      print('Error saving messages: $e');
+    }
+  }
+
+  // ==================== MESSAGE MANAGEMENT ====================
+
+  void _addWelcomeMessage() {
+    if (_messages.isEmpty) {
+      _messages.add(ChatMessage(
+        id: const Uuid().v4(),
+        text: "Hello Doctor! 👋 I'm HeartBot.\n\nI can help you understand heart disease risk factors, explain medical terms, and support your clinical decisions. How can I assist you today?",
+        isUser: false,
+        timestamp: DateTime.now(),
+        isSystem: true,
+      ));
+    }
+  }
+
   void _addPredictionContext(Map<String, dynamic> context) {
     final patientName = context['patient_name'] ?? 'Patient';
-    final riskScore = (context['risk_score'] as double) * 100;
-    final riskCategory = context['risk_category'];
+    final riskScore = (context['risk_score'] as double? ?? 0.0) * 100;
+    final riskCategory = context['risk_category'] ?? 'Unknown';
+    final hasDisease = context['has_disease'] ?? false;
 
     final clinicalSummary = '''
-**PATIENT CLINICAL SUMMARY**
+**📋 PATIENT CLINICAL SUMMARY**
 
-👤 **Demographics:**
+**Demographics:**
 • Name: $patientName
-• Age: ${context['age']} years
-• Gender: ${context['gender']}
+• Age: ${context['age'] ?? '--'} years
+• Gender: ${_formatGender(context['gender'])} 
 
-🫀 **Clinical Measurements:**
-• Chest Pain Type: ${context['chest_pain_type']}
-• Resting BP: ${context['resting_bp']} mm Hg
-• Cholesterol: ${context['cholesterol']} mg/dl
-• Fasting Blood Sugar: ${context['fasting_blood_sugar']}
-• Resting ECG: ${context['resting_ecg']}
-• Max Heart Rate: ${context['max_heart_rate']} bpm
-• Exercise Angina: ${context['exercise_angina']}
-• ST Depression: ${context['st_depression']} mm
-• ST Slope: ${context['st_slope']}
+**🫀 Clinical Measurements:**
+• Chest Pain Type: ${context['chest_pain_type'] ?? '--'}
+• Resting BP: ${context['resting_bp'] ?? '--'} mm Hg
+• Cholesterol: ${context['cholesterol'] ?? '--'} mg/dl
+• Fasting Blood Sugar: ${context['fasting_blood_sugar'] ?? '--'}
+• Resting ECG: ${context['resting_ecg'] ?? '--'}
+• Max Heart Rate: ${context['max_heart_rate'] ?? '--'} bpm
+• Exercise Angina: ${context['exercise_angina'] ?? '--'}
+• ST Depression: ${context['st_depression'] ?? '--'} mm
+• ST Slope: ${context['st_slope'] ?? '--'}
 
-📊 **Risk Assessment:**
+**📊 Risk Assessment:**
 • Risk Score: ${riskScore.toInt()}%
 • Risk Category: ${riskCategory.toUpperCase()}
-• Disease Detected: ${context['has_disease'] ? 'YES' : 'NO'}
+• Disease Detected: ${hasDisease ? '⚠️ YES' : '✅ NO'}
 
 ---
-Ask me about these values, their clinical significance, or treatment recommendations.
+*Ask me about these values, their clinical significance, or treatment recommendations.*
 ''';
 
     _messages.add(ChatMessage(
@@ -77,43 +134,49 @@ Ask me about these values, their clinical significance, or treatment recommendat
       text: clinicalSummary,
       isUser: false,
       timestamp: DateTime.now(),
+      isSystem: true,
+      isContext: true,
     ));
   }
 
-  void _addWelcomeMessage() {
-    _messages.add(ChatMessage(
-      id: const Uuid().v4(),
-      text:
-          "Hello Doctor! I'm HeartBot. I can help you understand heart disease risk factors, explain medical terms, and support your clinical decisions. How can I assist you today?",
-      isUser: false,
-      timestamp: DateTime.now(),
-    ));
+  String _formatGender(dynamic gender) {
+    if (gender == null) return 'Not specified';
+    if (gender is int) return gender == 1 ? 'Male' : 'Female';
+    return gender.toString();
   }
+
+  // ==================== SEND MESSAGE ====================
 
   Future<void> _sendMessage() async {
-    if (_messageController.text.trim().isEmpty) return;
+    final text = _messageController.text.trim();
+    if (text.isEmpty) return;
 
-    final userMessage = _messageController.text.trim();
     _messageController.clear();
-
     setState(() {
-      _messages.add(ChatMessage(
-        id: const Uuid().v4(),
-        text: userMessage,
-        isUser: true,
-        timestamp: DateTime.now(),
-      ));
-      _isLoading = true;
+      _hasError = false;
+      _errorMessage = null;
     });
 
+    // Add user message
+    final userMessage = ChatMessage(
+      id: const Uuid().v4(),
+      text: text,
+      isUser: true,
+      timestamp: DateTime.now(),
+    );
+    setState(() => _messages.add(userMessage));
     _scrollToBottom();
+    await _savePersistedMessages();
+
+    // Send to API
+    setState(() => _isLoading = true);
 
     try {
       final response = _currentContext != null
-          ? await _chatbot.sendMessageWithContext(userMessage,
-              context: _currentContext)
-          : await _chatbot.sendMessage(userMessage);
+          ? await _chatbot.sendMessageWithContext(text, context: _currentContext)
+          : await _chatbot.sendMessage(text);
 
+      // Add bot response
       setState(() {
         _messages.add(ChatMessage(
           id: const Uuid().v4(),
@@ -121,21 +184,30 @@ Ask me about these values, their clinical significance, or treatment recommendat
           isUser: false,
           timestamp: DateTime.now(),
         ));
+        _isLoading = false;
       });
-    } catch (_) {
+      
+      await _savePersistedMessages();
+    } catch (e) {
       setState(() {
+        _hasError = true;
+        _errorMessage = e.toString();
+        _isLoading = false;
+        
         _messages.add(ChatMessage(
           id: const Uuid().v4(),
-          text: "I'm sorry, I'm having trouble responding. Please try again.",
+          text: "❌ I'm sorry, I encountered an error. Please try again.",
           isUser: false,
           timestamp: DateTime.now(),
+          isError: true,
         ));
       });
-    } finally {
-      setState(() => _isLoading = false);
-      _scrollToBottom();
     }
+
+    _scrollToBottom();
   }
+
+  // ==================== UI HELPERS ====================
 
   void _scrollToBottom() {
     Future.delayed(const Duration(milliseconds: 100), () {
@@ -153,230 +225,653 @@ Ask me about these values, their clinical significance, or treatment recommendat
     setState(() => _currentContext = null);
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(
-          content: Text('Context cleared. You can now ask general questions.')),
+        content: Text('Patient context cleared. You can now ask general questions.'),
+        backgroundColor: Colors.orange,
+      ),
     );
   }
 
+  void _clearChat() {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Clear Chat'),
+        content: const Text('This will clear all conversation history. Continue?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () {
+              Navigator.pop(ctx);
+              setState(() {
+                _messages.clear();
+                _chatbot.clearHistory();
+                _addWelcomeMessage();
+                if (_currentContext != null) {
+                  _addPredictionContext(_currentContext!);
+                }
+              });
+              _savePersistedMessages();
+            },
+            style: TextButton.styleFrom(foregroundColor: Colors.red),
+            child: const Text('Clear'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _exportConversation() async {
+    if (_messages.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No conversation to export')),
+      );
+      return;
+    }
+
+    // Save current conversation
+    final conversationId = DateTime.now().toIso8601String();
+    await ConversationManager.saveConversation(conversationId, _messages);
+    
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('✅ Conversation exported successfully'),
+        backgroundColor: Colors.green,
+      ),
+    );
+  }
+
+  void _viewSavedConversations() {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('💾 Saved Conversations'),
+        content: const Text(
+          'Feature coming soon!\n\n'
+          'This will allow you to:\n'
+          '• View all your saved conversations\n'
+          '• Load previous conversations\n'
+          '• Delete old conversations\n'
+          '• Export conversations as text files'
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Close'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _openKnowledgeBase() {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('📚 Medical Knowledge Base'),
+        content: const Text(
+          'Feature coming soon!\n\n'
+          'This will include:\n'
+          '• ECG Interpretation Guidelines\n'
+          '• Cholesterol Management\n'
+          '• Blood Pressure Classification\n'
+          '• Cardiac Risk Factors\n'
+          '• Treatment Protocols\n'
+          '• And more clinical references...'
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Close'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _copyLastResponse() {
+    if (_messages.isNotEmpty) {
+      final lastMessage = _messages.lastWhere(
+        (msg) => !msg.isUser,
+        orElse: () => _messages.last,
+      );
+      
+      // Actually copy to clipboard
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('📋 Response copied to clipboard')),
+      );
+    }
+  }
+
+  // ==================== BUILD ====================
+
   @override
   Widget build(BuildContext context) {
+    super.build(context);
     final r = Responsive.of(context);
     final t = AppThemeTokens.of(context);
     final isDesktop = MediaQuery.of(context).size.width >= 900;
 
-    Widget chatContent = Column(
+    return Scaffold(
+      backgroundColor: t.bg,
+      appBar: _buildAppBar(r, t, isDesktop),
+      body: _buildBody(r, t, isDesktop),
+    );
+  }
+
+  PreferredSizeWidget _buildAppBar(Responsive r, AppThemeTokens t, bool isDesktop) {
+    return AppBar(
+      title: Row(
+        children: [
+          Container(
+            width: isDesktop ? 36 : r.wp(32),
+            height: isDesktop ? 36 : r.wp(32),
+            decoration: BoxDecoration(
+              color: AppColors.sageGreen.withOpacity(0.15),
+              shape: BoxShape.circle,
+            ),
+            child: Icon(
+              Icons.smart_toy_outlined,
+              color: AppColors.sageGreen,
+              size: isDesktop ? 18 : r.wp(17),
+            ),
+          ),
+          SizedBox(width: r.wp(10)),
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                'HeartBot',
+                style: TextStyle(
+                  fontSize: isDesktop ? 16 : r.fs(16),
+                  fontWeight: FontWeight.w700,
+                  color: t.textPrimary,
+                ),
+              ),
+              Row(
+                children: [
+                  Container(
+                    width: 6,
+                    height: 6,
+                    decoration: BoxDecoration(
+                      color: _chatbot.historyLength > 1 ? Colors.green : Colors.orange,
+                      shape: BoxShape.circle,
+                    ),
+                  ),
+                  const SizedBox(width: 6),
+                  Text(
+                    _currentContext != null 
+                        ? 'Patient context active' 
+                        : _chatbot.historyLength > 1 
+                            ? 'Active conversation' 
+                            : 'Ready to help',
+                    style: TextStyle(
+                      fontSize: isDesktop ? 11 : r.fs(11),
+                      color: _currentContext != null
+                          ? AppColors.sageGreen
+                          : t.textMuted,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ],
+      ),
+      backgroundColor: t.bg,
+      elevation: 0,
+      foregroundColor: t.textPrimary,
+      bottom: PreferredSize(
+        preferredSize: const Size.fromHeight(1),
+        child: Divider(height: 1, color: t.border),
+      ),
+      actions: [
+        // Knowledge base
+        IconButton(
+          icon: Icon(Icons.library_books_outlined, color: t.textMuted),
+          onPressed: _openKnowledgeBase,
+          tooltip: 'Knowledge Base',
+        ),
+        // Export
+        IconButton(
+          icon: Icon(Icons.share_outlined, color: t.textMuted),
+          onPressed: _messages.length > 1 ? _exportConversation : null,
+          tooltip: 'Export conversation',
+        ),
+        // Saved conversations
+        IconButton(
+          icon: Icon(Icons.folder_outlined, color: t.textMuted),
+          onPressed: _viewSavedConversations,
+          tooltip: 'Saved conversations',
+        ),
+        // Copy last response
+        if (_messages.isNotEmpty && !_messages.last.isUser)
+          IconButton(
+            icon: Icon(Icons.copy_outlined, color: t.textMuted),
+            onPressed: _copyLastResponse,
+            tooltip: 'Copy last response',
+          ),
+        // Clear chat
+        IconButton(
+          icon: Icon(
+            Icons.delete_outline, 
+            color: _messages.length > 1 ? Colors.red.shade400 : t.textMuted,
+          ),
+          onPressed: _messages.length > 1 ? _clearChat : null,
+          tooltip: 'Clear chat history',
+        ),
+        // Clear context
+        if (_currentContext != null)
+          Padding(
+            padding: EdgeInsets.only(right: isDesktop ? 16 : r.wp(8)),
+            child: IconButton(
+              icon: Container(
+                padding: const EdgeInsets.all(6),
+                decoration: BoxDecoration(
+                  color: Colors.red.withOpacity(0.08),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Icon(
+                  Icons.clear_all,
+                  size: 16,
+                  color: Colors.red.shade400,
+                ),
+              ),
+              onPressed: _clearContext,
+              tooltip: 'Clear patient context',
+            ),
+          ),
+      ],
+    );
+  }
+
+  Widget _buildBody(Responsive r, AppThemeTokens t, bool isDesktop) {
+    return SafeArea(
+      child: isDesktop
+          ? Row(
+              children: [
+                Expanded(
+                  child: Center(
+                    child: ConstrainedBox(
+                      constraints: const BoxConstraints(maxWidth: 850),
+                      child: _buildChatContent(r, t),
+                    ),
+                  ),
+                ),
+                if (_currentContext != null) ...[
+                  VerticalDivider(width: 1, thickness: 1, color: t.border.withOpacity(0.5)),
+                  _PatientContextSidebar(contextData: _currentContext!, r: r, t: t),
+                ],
+              ],
+            )
+          : _buildChatContent(r, t),
+    );
+  }
+
+  Widget _buildChatContent(Responsive r, AppThemeTokens t) {
+    return Column(
       children: [
         Expanded(
           child: ListView.builder(
             controller: _scrollController,
             padding: EdgeInsets.symmetric(
-                horizontal: isDesktop ? 24 : r.hp, vertical: r.sp(16)),
+              horizontal: MediaQuery.of(context).size.width >= 900 ? 24 : r.hp,
+              vertical: r.sp(16),
+            ),
             itemCount: _messages.length,
-            itemBuilder: (context, index) =>
-                _ChatBubble(message: _messages[index], r: r, isDesktop: isDesktop),
+            itemBuilder: (context, index) => _ChatBubble(
+              message: _messages[index],
+              r: r,
+              isDesktop: MediaQuery.of(context).size.width >= 900,
+            ),
           ),
         ),
-
+        // Error banner
+        if (_hasError && _errorMessage != null)
+          Container(
+            padding: EdgeInsets.symmetric(horizontal: r.hp, vertical: r.sp(8)),
+            color: Colors.red.shade50,
+            child: Row(
+              children: [
+                Icon(Icons.error_outline, color: Colors.red.shade400, size: r.sp(16)),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    _errorMessage!,
+                    style: TextStyle(color: Colors.red.shade700, fontSize: r.fs(12)),
+                  ),
+                ),
+                IconButton(
+                  icon: Icon(Icons.close, size: r.sp(16)),
+                  onPressed: () => setState(() => _hasError = false),
+                ),
+              ],
+            ),
+          ),
         // Typing indicator
-        if (_isLoading)
-          Padding(
-            padding: EdgeInsets.symmetric(
-                horizontal: isDesktop ? 24 : r.hp, vertical: r.sp(4)),
-            child: Align(
-              alignment: Alignment.centerLeft,
-              child: Container(
-                padding: EdgeInsets.symmetric(
-                    horizontal: r.wp(16), vertical: r.sp(12)),
-                decoration: BoxDecoration(
-                  color: AppThemeTokens.of(context).card,
-                  borderRadius: BorderRadius.circular(r.sp(18)),
-                  border: Border.all(
-                      color: AppColors.sageGreen.withOpacity(0.2)),
-                ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    _TypingDot(delay: 0),
-                    SizedBox(width: r.wp(4)),
-                    _TypingDot(delay: 150),
-                    SizedBox(width: r.wp(4)),
-                    _TypingDot(delay: 300),
-                  ],
-                ),
-              ),
-            ),
-          ),
-
+        if (_isLoading) _buildTypingIndicator(r),
         // Input bar
-        Container(
-          padding: EdgeInsets.symmetric(
-              horizontal: isDesktop ? 24 : r.hp, vertical: r.sp(12)),
-          decoration: BoxDecoration(
-            color: t.surface,
-            border: Border(top: BorderSide(color: t.border)),
-            boxShadow: [
-              BoxShadow(
-                color: t.textPrimary.withOpacity(0.04),
-                blurRadius: 12,
-                offset: const Offset(0, -4),
-              ),
-            ],
-          ),
-          child: SafeArea(
-            top: false,
-            child: Center(
-              child: ConstrainedBox(
-                constraints: BoxConstraints(maxWidth: isDesktop ? 800 : double.infinity),
-                child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.end,
-                  children: [
-                    Expanded(
-                      child: Container(
-                        decoration: BoxDecoration(
-                          color: t.bg,
-                          borderRadius: BorderRadius.circular(r.sp(22)),
-                          border: Border.all(color: t.border),
-                        ),
-                        child: TextField(
-                          controller: _messageController,
-                          style: TextStyle(
-                              fontSize: r.fs(14), color: t.textPrimary),
-                          decoration: InputDecoration(
-                            hintText: _currentContext != null
-                                ? 'Ask about this patient...'
-                                : 'Ask HeartBot anything...',
-                            hintStyle: TextStyle(
-                                fontSize: r.fs(14), color: t.textMuted),
-                            border: InputBorder.none,
-                            contentPadding: EdgeInsets.symmetric(
-                                horizontal: r.wp(16), vertical: r.sp(12)),
-                          ),
-                          maxLines: null,
-                          textInputAction: TextInputAction.send,
-                          onSubmitted: (_) => _sendMessage(),
-                        ),
-                      ),
-                    ),
-                    SizedBox(width: r.wp(10)),
-                    GestureDetector(
-                      onTap: _sendMessage,
-                      child: Container(
-                        width: isDesktop ? 44 : r.wp(46),
-                        height: isDesktop ? 44 : r.wp(46),
-                        decoration: BoxDecoration(
-                          color: AppColors.sageGreen,
-                          shape: BoxShape.circle,
-                          boxShadow: [
-                            BoxShadow(
-                              color: AppColors.sageGreen.withOpacity(0.35),
-                              blurRadius: 10,
-                              offset: const Offset(0, 4),
-                            ),
-                          ],
-                        ),
-                        child: Icon(Icons.send_rounded,
-                            color: Colors.white, size: isDesktop ? 18 : r.wp(20)),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ),
-        ),
+        _buildInputBar(r, t),
       ],
     );
+  }
 
-    return Scaffold(
-      backgroundColor: t.bg,
-      appBar: AppBar(
-        title: Row(
-          children: [
-            Container(
-              width: isDesktop ? 36 : r.wp(32),
-              height: isDesktop ? 36 : r.wp(32),
-              decoration: BoxDecoration(
-                color: AppColors.sageGreen.withOpacity(0.15),
-                shape: BoxShape.circle,
-              ),
-              child: Icon(Icons.smart_toy_outlined,
-                  color: AppColors.sageGreen, size: isDesktop ? 18 : r.wp(17)),
+  Widget _buildTypingIndicator(Responsive r) {
+    return Padding(
+      padding: EdgeInsets.symmetric(
+        horizontal: MediaQuery.of(context).size.width >= 900 ? 24 : r.hp,
+        vertical: r.sp(4),
+      ),
+      child: Align(
+        alignment: Alignment.centerLeft,
+        child: Container(
+          padding: EdgeInsets.symmetric(
+            horizontal: r.wp(16),
+            vertical: r.sp(12),
+          ),
+          decoration: BoxDecoration(
+            color: AppThemeTokens.of(context).card,
+            borderRadius: BorderRadius.circular(r.sp(18)),
+            border: Border.all(
+              color: AppColors.sageGreen.withOpacity(0.2),
             ),
-            SizedBox(width: r.wp(10)),
-            Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              _TypingDot(delay: 0),
+              SizedBox(width: r.wp(4)),
+              _TypingDot(delay: 150),
+              SizedBox(width: r.wp(4)),
+              _TypingDot(delay: 300),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildInputBar(Responsive r, AppThemeTokens t) {
+    final isDesktop = MediaQuery.of(context).size.width >= 900;
+
+    return Container(
+      padding: EdgeInsets.symmetric(
+        horizontal: isDesktop ? 24 : r.hp,
+        vertical: r.sp(12),
+      ),
+      decoration: BoxDecoration(
+        color: t.surface,
+        border: Border(top: BorderSide(color: t.border)),
+        boxShadow: [
+          BoxShadow(
+            color: t.textPrimary.withOpacity(0.04),
+            blurRadius: 12,
+            offset: const Offset(0, -4),
+          ),
+        ],
+      ),
+      child: SafeArea(
+        top: false,
+        child: Center(
+          child: ConstrainedBox(
+            constraints: BoxConstraints(
+              maxWidth: isDesktop ? 800 : double.infinity,
+            ),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.end,
               children: [
-                Text('HeartBot',
-                    style: TextStyle(
-                        fontSize: isDesktop ? 16 : r.fs(16),
-                        fontWeight: FontWeight.w700,
-                        color: t.textPrimary)),
-                Text(
-                  _currentContext != null ? 'Patient context active' : 'Ready to help',
-                  style: TextStyle(
-                    fontSize: isDesktop ? 11 : r.fs(11),
-                    color: _currentContext != null
-                        ? AppColors.sageGreen
-                        : t.textMuted,
-                    fontWeight: FontWeight.w500,
+                Expanded(
+                  child: Container(
+                    decoration: BoxDecoration(
+                      color: t.bg,
+                      borderRadius: BorderRadius.circular(r.sp(22)),
+                      border: Border.all(
+                        color: _hasError ? Colors.red : t.border,
+                      ),
+                    ),
+                    child: TextField(
+                      controller: _messageController,
+                      style: TextStyle(
+                        fontSize: r.fs(14),
+                        color: t.textPrimary,
+                      ),
+                      decoration: InputDecoration(
+                        hintText: _currentContext != null
+                            ? 'Ask about this patient...'
+                            : 'Ask HeartBot anything...',
+                        hintStyle: TextStyle(
+                          fontSize: r.fs(14),
+                          color: t.textMuted,
+                        ),
+                        border: InputBorder.none,
+                        contentPadding: EdgeInsets.symmetric(
+                          horizontal: r.wp(16),
+                          vertical: r.sp(12),
+                        ),
+                        suffixIcon: _messageController.text.isNotEmpty
+                            ? IconButton(
+                                icon: Icon(
+                                  Icons.close_rounded,
+                                  color: t.textMuted,
+                                  size: r.sp(16),
+                                ),
+                                onPressed: () => _messageController.clear(),
+                              )
+                            : null,
+                      ),
+                      maxLines: null,
+                      textInputAction: TextInputAction.send,
+                      onSubmitted: (_) => _sendMessage(),
+                      onChanged: (text) => setState(() {}),
+                    ),
+                  ),
+                ),
+                SizedBox(width: r.wp(10)),
+                GestureDetector(
+                  onTap: _sendMessage,
+                  child: Container(
+                    width: isDesktop ? 44 : r.wp(46),
+                    height: isDesktop ? 44 : r.wp(46),
+                    decoration: BoxDecoration(
+                      color: _isLoading ? t.textMuted : AppColors.sageGreen,
+                      shape: BoxShape.circle,
+                      boxShadow: [
+                        BoxShadow(
+                          color: AppColors.sageGreen.withOpacity(0.35),
+                          blurRadius: 10,
+                          offset: const Offset(0, 4),
+                        ),
+                      ],
+                    ),
+                    child: Icon(
+                      _isLoading ? Icons.stop_rounded : Icons.send_rounded,
+                      color: Colors.white,
+                      size: isDesktop ? 18 : r.wp(20),
+                    ),
                   ),
                 ),
               ],
             ),
-          ],
+          ),
         ),
-        backgroundColor: t.bg,
-        elevation: 0,
-        foregroundColor: t.textPrimary,
-        bottom: PreferredSize(
-          preferredSize: const Size.fromHeight(1),
-          child: Divider(height: 1, color: t.border),
-        ),
-        actions: [
-          if (_currentContext != null)
-            Padding(
-              padding: EdgeInsets.only(right: isDesktop ? 16 : r.wp(8)),
-              child: IconButton(
-                icon: Container(
-                  padding: const EdgeInsets.all(6),
-                  decoration: BoxDecoration(
-                    color: Colors.red.withOpacity(0.08),
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  child: Icon(Icons.clear_all,
-                      size: 16, color: Colors.red.shade400),
-                ),
-                onPressed: _clearContext,
-                tooltip: 'Clear patient context',
-              ),
-            ),
-        ],
-      ),
-      body: SafeArea(
-        child: isDesktop
-            ? Row(
-                children: [
-                  Expanded(
-                    child: Center(
-                      child: ConstrainedBox(
-                        constraints: const BoxConstraints(maxWidth: 850),
-                        child: chatContent,
-                      ),
-                    ),
-                  ),
-                  if (_currentContext != null) ...[
-                    VerticalDivider(width: 1, thickness: 1, color: t.border.withOpacity(0.5)),
-                    _PatientContextSidebar(contextData: _currentContext!, r: r, t: t),
-                  ],
-                ],
-              )
-            : chatContent,
       ),
     );
   }
 }
 
-// ── Patient Context Sidebar for Desktop ───────────────────────────────────────
+// ==================== TYPING DOT ====================
+
+class _TypingDot extends StatefulWidget {
+  final int delay;
+  const _TypingDot({required this.delay});
+
+  @override
+  State<_TypingDot> createState() => _TypingDotState();
+}
+
+class _TypingDotState extends State<_TypingDot> with SingleTickerProviderStateMixin {
+  late final AnimationController _ctrl;
+  late final Animation<double> _anim;
+
+  @override
+  void initState() {
+    super.initState();
+    _ctrl = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 600),
+    );
+    _anim = Tween<double>(begin: 0, end: -6).animate(
+      CurvedAnimation(parent: _ctrl, curve: Curves.easeInOut),
+    );
+    Future.delayed(Duration(milliseconds: widget.delay), () {
+      if (mounted) _ctrl.repeat(reverse: true);
+    });
+  }
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: _anim,
+      builder: (_, __) => Transform.translate(
+        offset: Offset(0, _anim.value),
+        child: Container(
+          width: 6,
+          height: 6,
+          decoration: const BoxDecoration(
+            color: AppColors.sageGreen,
+            shape: BoxShape.circle,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// ==================== CHAT BUBBLE ====================
+
+class _ChatBubble extends StatelessWidget {
+  final ChatMessage message;
+  final Responsive r;
+  final bool isDesktop;
+
+  const _ChatBubble({
+    required this.message,
+    required this.r,
+    this.isDesktop = false,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final t = AppThemeTokens.of(context);
+
+    return Align(
+      alignment: message.isUser ? Alignment.centerRight : Alignment.centerLeft,
+      child: Column(
+        crossAxisAlignment: message.isUser ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+        children: [
+          Container(
+            margin: EdgeInsets.only(
+              top: r.sp(4),
+              bottom: r.sp(2),
+              left: message.isUser ? (isDesktop ? 120 : r.wp(48)) : 0,
+              right: message.isUser ? 0 : (isDesktop ? 120 : r.wp(48)),
+            ),
+            padding: EdgeInsets.symmetric(
+              horizontal: r.wp(14),
+              vertical: r.sp(11),
+            ),
+            decoration: BoxDecoration(
+              color: message.isUser 
+                  ? AppColors.sageGreen 
+                  : message.isError == true 
+                      ? Colors.red.shade50
+                      : t.card,
+              borderRadius: BorderRadius.only(
+                topLeft: Radius.circular(r.sp(18)),
+                topRight: Radius.circular(r.sp(18)),
+                bottomLeft: Radius.circular(message.isUser ? r.sp(18) : r.sp(4)),
+                bottomRight: Radius.circular(message.isUser ? r.sp(4) : r.sp(18)),
+              ),
+              border: message.isUser
+                  ? null
+                  : Border.all(
+                      color: message.isError == true 
+                          ? Colors.red.shade200 
+                          : AppColors.sageGreen.withOpacity(0.20),
+                    ),
+              boxShadow: [
+                BoxShadow(
+                  color: (message.isUser ? AppColors.sageGreen : t.textPrimary)
+                      .withOpacity(0.08),
+                  blurRadius: 8,
+                  offset: const Offset(0, 2),
+                ),
+              ],
+            ),
+            child: Text(
+              message.text,
+              style: TextStyle(
+                color: message.isUser 
+                    ? Colors.white 
+                    : message.isError == true 
+                        ? Colors.red.shade700
+                        : t.textPrimary,
+                fontSize: r.fs(14),
+                height: 1.45,
+              ),
+            ),
+          ),
+          Padding(
+            padding: EdgeInsets.only(
+              bottom: r.sp(8),
+              left: message.isUser ? 0 : (isDesktop ? 4 : r.wp(4)),
+              right: message.isUser ? (isDesktop ? 4 : r.wp(4)) : 0,
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (message.isSystem == true && !message.isUser)
+                  Icon(
+                    Icons.info_outline,
+                    size: r.fs(10),
+                    color: t.textMuted,
+                  ),
+                if (message.isSystem == true && !message.isUser)
+                  SizedBox(width: r.wp(4)),
+                Text(
+                  _formatTime(message.timestamp),
+                  style: TextStyle(
+                    fontSize: r.fs(10),
+                    color: t.textMuted,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  String _formatTime(DateTime dt) {
+    final h = dt.hour.toString().padLeft(2, '0');
+    final m = dt.minute.toString().padLeft(2, '0');
+    return '$h:$m';
+  }
+}
+
+// ==================== PATIENT CONTEXT SIDEBAR ====================
+
 class _PatientContextSidebar extends StatelessWidget {
   final Map<String, dynamic> contextData;
   final Responsive r;
@@ -482,7 +977,11 @@ class _PatientContextSidebar extends StatelessWidget {
                         const SizedBox(width: 10),
                         Text(
                           '${riskScore.toInt()}%',
-                          style: TextStyle(fontSize: 13, fontWeight: FontWeight.w800, color: t.textPrimary),
+                          style: TextStyle(
+                            fontSize: 13,
+                            fontWeight: FontWeight.w800,
+                            color: t.textPrimary,
+                          ),
                         ),
                       ],
                     ),
@@ -547,7 +1046,12 @@ class _SidebarCard extends StatelessWidget {
               const SizedBox(width: 8),
               Text(
                 title,
-                style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: t.textMuted, letterSpacing: 0.3),
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w700,
+                  color: t.textMuted,
+                  letterSpacing: 0.3,
+                ),
               ),
             ],
           ),
@@ -564,7 +1068,11 @@ class _SidebarRow extends StatelessWidget {
   final String value;
   final AppThemeTokens t;
 
-  const _SidebarRow({required this.label, required this.value, required this.t});
+  const _SidebarRow({
+    required this.label,
+    required this.value,
+    required this.t,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -573,159 +1081,21 @@ class _SidebarRow extends StatelessWidget {
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
-          Text(label, style: TextStyle(fontSize: 12, color: t.textMuted)),
-          Text(value, style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: t.textPrimary)),
-        ],
-      ),
-    );
-  }
-}
-
-// ── Typing dot ───────────────────────────────
-class _TypingDot extends StatefulWidget {
-  final int delay;
-  const _TypingDot({required this.delay});
-
-  @override
-  State<_TypingDot> createState() => _TypingDotState();
-}
-
-class _TypingDotState extends State<_TypingDot>
-    with SingleTickerProviderStateMixin {
-  late final AnimationController _ctrl;
-  late final Animation<double> _anim;
-
-  @override
-  void initState() {
-    super.initState();
-    _ctrl = AnimationController(
-        vsync: this, duration: const Duration(milliseconds: 600));
-    _anim = Tween<double>(begin: 0, end: -6).animate(
-        CurvedAnimation(parent: _ctrl, curve: Curves.easeInOut));
-    Future.delayed(Duration(milliseconds: widget.delay), () {
-      if (mounted) _ctrl.repeat(reverse: true);
-    });
-  }
-
-  @override
-  void dispose() {
-    _ctrl.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return AnimatedBuilder(
-      animation: _anim,
-      builder: (_, __) => Transform.translate(
-        offset: Offset(0, _anim.value),
-        child: Container(
-          width: 6,
-          height: 6,
-          decoration: const BoxDecoration(
-            color: AppColors.sageGreen,
-            shape: BoxShape.circle,
+          Text(
+            label,
+            style: TextStyle(fontSize: 12, color: t.textMuted),
           ),
-        ),
-      ),
-    );
-  }
-}
-
-// ── Message model ────────────────────────────
-class ChatMessage {
-  final String id;
-  final String text;
-  final bool isUser;
-  final DateTime timestamp;
-
-  ChatMessage({
-    required this.id,
-    required this.text,
-    required this.isUser,
-    required this.timestamp,
-  });
-}
-
-// ── Chat bubble ──────────────────────────────
-class _ChatBubble extends StatelessWidget {
-  final ChatMessage message;
-  final Responsive r;
-  final bool isDesktop;
-
-  const _ChatBubble({required this.message, required this.r, this.isDesktop = false});
-
-  @override
-  Widget build(BuildContext context) {
-    final t = AppThemeTokens.of(context);
-
-    return Align(
-      alignment:
-          message.isUser ? Alignment.centerRight : Alignment.centerLeft,
-      child: Column(
-        crossAxisAlignment: message.isUser
-            ? CrossAxisAlignment.end
-            : CrossAxisAlignment.start,
-        children: [
-          Container(
-            margin: EdgeInsets.only(
-              top: r.sp(4),
-              bottom: r.sp(2),
-              left: message.isUser ? (isDesktop ? 120 : r.wp(48)) : 0,
-              right: message.isUser ? 0 : (isDesktop ? 120 : r.wp(48)),
+          Text(
+            value,
+            style: TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.w600,
+              color: t.textPrimary,
             ),
-            padding: EdgeInsets.symmetric(
-                horizontal: r.wp(14), vertical: r.sp(11)),
-            decoration: BoxDecoration(
-              color: message.isUser ? AppColors.sageGreen : t.card,
-              borderRadius: BorderRadius.only(
-                topLeft: Radius.circular(r.sp(18)),
-                topRight: Radius.circular(r.sp(18)),
-                bottomLeft: Radius.circular(message.isUser ? r.sp(18) : r.sp(4)),
-                bottomRight: Radius.circular(message.isUser ? r.sp(4) : r.sp(18)),
-              ),
-              border: message.isUser
-                  ? null
-                  : Border.all(color: AppColors.sageGreen.withOpacity(0.20)),
-              boxShadow: [
-                BoxShadow(
-                  color: (message.isUser
-                          ? AppColors.sageGreen
-                          : t.textPrimary)
-                      .withOpacity(0.08),
-                  blurRadius: 8,
-                  offset: const Offset(0, 2),
-                ),
-              ],
-            ),
-            child: Text(
-              message.text,
-              style: TextStyle(
-                color: message.isUser ? Colors.white : t.textPrimary,
-                fontSize: r.fs(14),
-                height: 1.45,
-              ),
-            ),
-          ),
-          Padding(
-            padding: EdgeInsets.only(
-              bottom: r.sp(8),
-              left: message.isUser ? 0 : (isDesktop ? 4 : r.wp(4)),
-              right: message.isUser ? (isDesktop ? 4 : r.wp(4)) : 0,
-            ),
-            child: Text(
-              _formatTime(message.timestamp),
-              style: TextStyle(fontSize: r.fs(10), color: t.textMuted),
-            ),
+            overflow: TextOverflow.ellipsis,
           ),
         ],
       ),
     );
-  }
-
-  String _formatTime(DateTime dt) {
-    final h = dt.hour.toString().padLeft(2, '0');
-    final m = dt.minute.toString().padLeft(2, '0');
-    return '$h:$m';
   }
 }

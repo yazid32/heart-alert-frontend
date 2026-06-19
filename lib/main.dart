@@ -50,9 +50,14 @@ class _HeartAlertAppState extends State<HeartAlertApp> with WidgetsBindingObserv
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    _initDeepLinks();
     
+    // Initialize deep links with proper error handling
     WidgetsBinding.instance.addPostFrameCallback((_) {
+      try {
+        _initDeepLinks();
+      } catch (e) {
+        print('❌ Deep link init failed: $e');
+      }
       _isNavigatorReady = true;
       _checkForPendingToken();
     });
