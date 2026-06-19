@@ -1,13 +1,13 @@
 // lib/screens/chatbot_screen.dart
+import 'dart:async';
 import 'dart:convert';
-import 'dart:async'; // ADD THIS LINE
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:uuid/uuid.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
-import 'dart:io';
 import '../services/chatbot_service.dart';
 import '../services/conversation_manager.dart';
 import '../theme/app_theme.dart';
@@ -38,6 +38,10 @@ class _ChatbotScreenState extends State<ChatbotScreen>
   String? _editingMessageId;
   int _typingSpeed = 0;
   Timer? _typingTimer;
+  bool _showScrollToBottom = false;
+  bool _isSearching = false;
+  String _searchQuery = '';
+  final TextEditingController _searchController = TextEditingController();
 
   // ==================== LIFECYCLE ====================
 
@@ -52,6 +56,8 @@ class _ChatbotScreenState extends State<ChatbotScreen>
       _currentContext = widget.initialContext;
       _addPredictionContext(widget.initialContext!);
     }
+
+    _scrollController.addListener(_onScroll);
   }
 
   @override
@@ -60,6 +66,7 @@ class _ChatbotScreenState extends State<ChatbotScreen>
     _savePersistedMessages();
     _messageController.dispose();
     _scrollController.dispose();
+    _searchController.dispose();
     super.dispose();
   }
 
@@ -98,7 +105,7 @@ class _ChatbotScreenState extends State<ChatbotScreen>
       _messages.add(ChatMessage(
         id: const Uuid().v4(),
         text:
-            "Hello Doctor! 👋 I'm HeartBot.\n\nI can help you understand heart disease risk factors, explain medical terms, and support your clinical decisions. How can I assist you today?",
+            "Hello Doctor! 👋 I'm HeartBot.\n\nI can help you understand heart disease risk factors, explain medical terms, and support your clinical decisions.\n\n⚕️ **Medical Disclaimer:**\n• This is NOT a medical diagnosis.\n• Please consult a healthcare professional.\n• Information is for educational purposes.\n• Clinical judgment should always take precedence.\n\nHow can I assist you today?",
         isUser: false,
         timestamp: DateTime.now(),
         isSystem: true,
@@ -162,7 +169,6 @@ class _ChatbotScreenState extends State<ChatbotScreen>
     final text = _messageController.text.trim();
     if (text.isEmpty) return;
 
-    // If editing, update the message
     if (_editingMessageId != null) {
       await _updateMessage(_editingMessageId!, text);
       return;
@@ -174,7 +180,6 @@ class _ChatbotScreenState extends State<ChatbotScreen>
       _errorMessage = null;
     });
 
-    // Add user message
     final userMessage = ChatMessage(
       id: const Uuid().v4(),
       text: text,
@@ -185,7 +190,6 @@ class _ChatbotScreenState extends State<ChatbotScreen>
     _scrollToBottom();
     await _savePersistedMessages();
 
-    // Send to API
     setState(() {
       _isLoading = true;
     });
@@ -326,6 +330,21 @@ class _ChatbotScreenState extends State<ChatbotScreen>
     );
   }
 
+  // ==================== MESSAGE REACTIONS ====================
+
+  void _handleReaction(String messageId, String type) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          type == 'like' 
+              ? '👍 Thanks for your feedback!' 
+              : '👎 We\'ll improve!',
+        ),
+        duration: const Duration(seconds: 1),
+      ),
+    );
+  }
+
   // ==================== UI HELPERS ====================
 
   void _scrollToBottom() {
@@ -340,6 +359,17 @@ class _ChatbotScreenState extends State<ChatbotScreen>
     });
   }
 
+  void _onScroll() {
+    if (_scrollController.hasClients) {
+      final maxScroll = _scrollController.position.maxScrollExtent;
+      final currentScroll = _scrollController.position.pixels;
+      final show = (maxScroll - currentScroll) > 200;
+      if (show != _showScrollToBottom) {
+        setState(() => _showScrollToBottom = show);
+      }
+    }
+  }
+
   bool _shouldShowTimestamp(int index) {
     if (index == 0) return true;
     final current = _messages[index];
@@ -348,12 +378,29 @@ class _ChatbotScreenState extends State<ChatbotScreen>
     return diff.inMinutes > 5;
   }
 
+  List<ChatMessage> get _filteredMessages {
+    if (_searchQuery.isEmpty) return _messages;
+    final query = _searchQuery.toLowerCase();
+    return _messages.where((m) => 
+      m.text.toLowerCase().contains(query)
+    ).toList();
+  }
+
+  void _toggleSearch() {
+    setState(() {
+      _isSearching = !_isSearching;
+      if (!_isSearching) {
+        _searchQuery = '';
+        _searchController.clear();
+      }
+    });
+  }
+
   void _clearContext() {
     setState(() => _currentContext = null);
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(
-        content:
-            Text('Patient context cleared. You can now ask general questions.'),
+        content: Text('Patient context cleared. You can now ask general questions.'),
         backgroundColor: Colors.orange,
       ),
     );
@@ -382,6 +429,9 @@ class _ChatbotScreenState extends State<ChatbotScreen>
                 }
                 _editingMessageId = null;
                 _messageController.clear();
+                _searchQuery = '';
+                _searchController.clear();
+                _isSearching = false;
               });
               _savePersistedMessages();
             },
@@ -393,18 +443,223 @@ class _ChatbotScreenState extends State<ChatbotScreen>
     );
   }
 
+  void _copyFullConversation() {
+    if (_messages.isEmpty) return;
+    
+    final StringBuffer buffer = StringBuffer();
+    buffer.writeln('═══════════════════════════════════════════════════');
+    buffer.writeln('  HEARTBOT CONVERSATION');
+    buffer.writeln('  ${DateTime.now().toLocal()}');
+    buffer.writeln('═══════════════════════════════════════════════════\n');
+    
+    for (var message in _messages) {
+      if (message.isSystem == true && !message.isUser) continue;
+      final prefix = message.isUser ? '👤 Doctor' : '⚕️ HeartBot';
+      buffer.writeln('$prefix:');
+      buffer.writeln(message.text);
+      buffer.writeln('─' * 40);
+      buffer.writeln();
+    }
+    
+    Clipboard.setData(ClipboardData(text: buffer.toString()));
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('📋 Full conversation copied to clipboard'),
+        duration: Duration(seconds: 2),
+      ),
+    );
+  }
+
+  // ==================== DISCLAIMER ====================
+
+  void _showFullDisclaimer() {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (context) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              margin: const EdgeInsets.only(top: 12),
+              width: 40,
+              height: 4,
+              decoration: BoxDecoration(
+                color: Colors.grey.shade300,
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+            const SizedBox(height: 16),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 20),
+              child: Row(
+                children: [
+                  const Icon(
+                    Icons.medical_information_rounded,
+                    color: AppColors.sageGreen,
+                    size: 24,
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: const Text(
+                      '⚠️ Medical Disclaimer',
+                      style: TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const Divider(),
+            Padding(
+              padding: const EdgeInsets.all(20),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'HeartBot is an AI-powered clinical support tool.',
+                    style: TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  const Text(
+                    '• This is NOT a medical diagnosis.',
+                    style: TextStyle(fontSize: 13, height: 1.6),
+                  ),
+                  const Text(
+                    '• Always consult a qualified healthcare professional.',
+                    style: TextStyle(fontSize: 13, height: 1.6),
+                  ),
+                  const Text(
+                    '• Information is for educational and reference purposes only.',
+                    style: TextStyle(fontSize: 13, height: 1.6),
+                  ),
+                  const Text(
+                    '• Clinical judgment should always take precedence.',
+                    style: TextStyle(fontSize: 13, height: 1.6),
+                  ),
+                  const Text(
+                    '• Verify all information before clinical use.',
+                    style: TextStyle(fontSize: 13, height: 1.6),
+                  ),
+                  const Text(
+                    '• Never rely solely on AI for medical decisions.',
+                    style: TextStyle(fontSize: 13, height: 1.6),
+                  ),
+                  const Text(
+                    '• In emergencies, call emergency services immediately.',
+                    style: TextStyle(fontSize: 13, height: 1.6),
+                  ),
+                  const Text(
+                    '• Your use of this tool is at your own risk.',
+                    style: TextStyle(fontSize: 13, height: 1.6),
+                  ),
+                  const SizedBox(height: 12),
+                  Container(
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: Colors.orange,
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: const Text(
+                      '⚠️ This AI tool is not a substitute for professional medical advice, diagnosis, or treatment.',
+                      style: TextStyle(
+                        fontSize: 13,
+                        color: Colors.white,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 20),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+              child: SizedBox(
+                width: double.infinity,
+                child: ElevatedButton(
+                  onPressed: () => Navigator.pop(context),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: AppColors.sageGreen,
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(vertical: 14),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                  ),
+                  child: const Text('I Understand'),
+                ),
+              ),
+            ),
+            const SizedBox(height: 8),
+          ],
+        ),
+      ),
+    );
+  }
+
   // ==================== QUICK REPLIES ====================
 
-  List<String> _getQuickReplies() {
+  List<String> _getContextualSuggestions() {
+    if (_currentContext != null) {
+      final riskScore = (_currentContext!['risk_score'] as double? ?? 0.0) * 100;
+      if (riskScore > 50) {
+        return [
+          'What are the urgent next steps?',
+          'Should I refer to a cardiologist?',
+          'What medications are typically prescribed?',
+          'What are the warning signs to watch for?',
+        ];
+      }
+      return [
+        'What lifestyle changes would help?',
+        'When should I schedule a follow-up?',
+        'Are there any preventive measures?',
+        'What tests are recommended?',
+      ];
+    }
+    
+    final lastUserMessage = _messages.lastWhere(
+      (m) => m.isUser,
+      orElse: () => _messages.last,
+    );
+    final text = lastUserMessage.text.toLowerCase();
+    
+    if (text.contains('symptom') || text.contains('chest')) {
+      return [
+        'When should I seek emergency care?',
+        'What are the common causes?',
+        'How can I manage this at home?',
+        'What tests are needed?',
+      ];
+    }
+    
+    if (text.contains('medication') || text.contains('drug')) {
+      return [
+        'What are the side effects?',
+        'Are there interactions to watch for?',
+        'How long should I take this?',
+        'What if I miss a dose?',
+      ];
+    }
+    
     if (_currentContext != null) {
       return [
         'What does this risk score mean?',
         'What treatment options exist?',
         'What lifestyle changes are recommended?',
         'What are the complications?',
-        'Is further testing needed?',
       ];
     }
+    
     return [
       'What is heart disease?',
       'Explain risk factors',
@@ -417,8 +672,9 @@ class _ChatbotScreenState extends State<ChatbotScreen>
   Widget _buildQuickReplies(Responsive r) {
     if (_isLoading) return const SizedBox.shrink();
     if (_editingMessageId != null) return const SizedBox.shrink();
+    if (_isSearching) return const SizedBox.shrink();
 
-    final replies = _getQuickReplies();
+    final replies = _getContextualSuggestions();
     final userMessageCount = _messages.where((m) => m.isUser).length;
     if (userMessageCount > 2) return const SizedBox.shrink();
 
@@ -450,6 +706,67 @@ class _ChatbotScreenState extends State<ChatbotScreen>
             ),
           );
         },
+      ),
+    );
+  }
+
+  // ==================== DISCLAIMER BANNER ====================
+
+  Widget _buildDisclaimerBanner(Responsive r, AppThemeTokens t) {
+    return GestureDetector(
+      onTap: _showFullDisclaimer,
+      child: Container(
+        padding: EdgeInsets.symmetric(
+          horizontal: r.hp,
+          vertical: r.sp(6),
+        ),
+        decoration: BoxDecoration(
+          color: AppColors.sageGreen.withOpacity(0.06),
+          border: Border(
+            top: BorderSide(
+              color: AppColors.sageGreen.withOpacity(0.15),
+              width: 0.5,
+            ),
+          ),
+        ),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(
+              Icons.medical_information_rounded,
+              color: AppColors.sageGreen.withOpacity(0.5),
+              size: r.sp(14),
+            ),
+            SizedBox(width: r.wp(6)),
+            Text(
+              'AI-generated, for clinical reference only',
+              style: TextStyle(
+                fontSize: r.fs(11),
+                color: t.textMuted.withOpacity(0.7),
+                fontWeight: FontWeight.w400,
+              ),
+            ),
+            SizedBox(width: r.wp(6)),
+            Container(
+              padding: EdgeInsets.symmetric(
+                horizontal: r.wp(4),
+                vertical: r.sp(2),
+              ),
+              decoration: BoxDecoration(
+                color: AppColors.sageGreen.withOpacity(0.1),
+                borderRadius: BorderRadius.circular(r.sp(12)),
+              ),
+              child: Text(
+                'Tap for info',
+                style: TextStyle(
+                  fontSize: r.fs(9),
+                  color: AppColors.sageGreen.withOpacity(0.6),
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -517,12 +834,12 @@ class _ChatbotScreenState extends State<ChatbotScreen>
               },
             ),
             ListTile(
-              leading: const Icon(Icons.picture_as_pdf_rounded),
-              title: const Text('Export as PDF'),
-              subtitle: const Text('PDF format with headers'),
+              leading: const Icon(Icons.html_rounded),
+              title: const Text('Export as HTML'),
+              subtitle: const Text('Beautiful formatted web page'),
               onTap: () {
                 Navigator.pop(context);
-                _exportAsPDF();
+                _exportAsHTML();
               },
             ),
             const SizedBox(height: 8),
@@ -631,8 +948,7 @@ class _ChatbotScreenState extends State<ChatbotScreen>
   Future<void> _exportAsJSON() async {
     try {
       final directory = await getTemporaryDirectory();
-      final fileName =
-          'HeartBot_Conversation_${DateTime.now().millisecondsSinceEpoch}.json';
+      final fileName = 'HeartBot_Conversation_${DateTime.now().millisecondsSinceEpoch}.json';
       final file = File('${directory.path}/$fileName');
 
       final jsonData = {
@@ -669,13 +985,78 @@ class _ChatbotScreenState extends State<ChatbotScreen>
     }
   }
 
-  Future<void> _exportAsPDF() async {
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text('📄 PDF export coming soon!'),
-        backgroundColor: Colors.orange,
-      ),
-    );
+  Future<void> _exportAsHTML() async {
+    try {
+      final directory = await getTemporaryDirectory();
+      final fileName = 'HeartBot_Conversation_${DateTime.now().millisecondsSinceEpoch}.html';
+      final file = File('${directory.path}/$fileName');
+
+      final htmlContent = '''
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>HeartBot Conversation</title>
+  <style>
+    body { font-family: Arial, sans-serif; max-width: 800px; margin: auto; padding: 20px; background: #f5f5f5; }
+    .container { background: white; border-radius: 12px; padding: 20px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+    .header { text-align: center; padding: 20px; background: #7A9E7E; color: white; border-radius: 8px; margin-bottom: 20px; }
+    .header h1 { margin: 0; font-size: 24px; }
+    .header p { margin: 5px 0 0; opacity: 0.9; font-size: 14px; }
+    .message { margin: 10px 0; padding: 15px; border-radius: 12px; }
+    .user { background: #7A9E7E; color: white; text-align: right; }
+    .bot { background: #f0f0f0; color: #333; }
+    .time { font-size: 10px; color: #999; margin-top: 5px; }
+    .disclaimer { background: #fff3cd; padding: 15px; margin: 20px 0; border-radius: 8px; border-left: 4px solid #ffc107; }
+    .disclaimer strong { color: #856404; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <h1>💬 HeartBot Conversation</h1>
+      <p>Exported: ${DateTime.now().toLocal()}</p>
+    </div>
+    <div class="disclaimer">
+      <strong>⚠️ Medical Disclaimer:</strong> AI-generated content for clinical reference only. 
+      Not a substitute for professional medical advice, diagnosis, or treatment.
+    </div>
+    ${_messages.where((m) => !(m.isSystem == true && !m.isUser)).map((m) => '''
+      <div class="message ${m.isUser ? 'user' : 'bot'}">
+        <strong>${m.isUser ? '👤 Doctor' : '⚕️ HeartBot'}</strong>
+        <p style="margin: 8px 0;">${m.text.replaceAll('\n', '<br>')}</p>
+        <div class="time">${_formatTimeOnly(m.timestamp)}</div>
+      </div>
+    ''').join('')}
+  </div>
+</body>
+</html>
+      ''';
+
+      await file.writeAsString(htmlContent);
+
+      final result = await Share.shareXFiles(
+        [XFile(file.path)],
+        text: 'HeartBot Conversation HTML Export',
+      );
+
+      if (result.status == ShareResultStatus.success) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('✅ HTML exported successfully'),
+            backgroundColor: Colors.green,
+          ),
+        );
+      }
+    } catch (e) {
+      print('Export error: $e');
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Failed to export: ${e.toString()}'),
+          backgroundColor: Colors.red,
+        ),
+      );
+    }
   }
 
   // ==================== SAVED CONVERSATIONS ====================
@@ -757,6 +1138,9 @@ class _ChatbotScreenState extends State<ChatbotScreen>
           _chatbot.clearHistory();
           _editingMessageId = null;
           _messageController.clear();
+          _searchQuery = '';
+          _searchController.clear();
+          _isSearching = false;
         });
         _savePersistedMessages();
         ScaffoldMessenger.of(context).showSnackBar(
@@ -831,13 +1215,31 @@ class _ChatbotScreenState extends State<ChatbotScreen>
     });
   }
 
-  void _showConversationStats() {
+  String _getConversationSummary() {
     final userMessages = _messages.where((m) => m.isUser).length;
-    final botMessages =
-        _messages.where((m) => !m.isUser && !(m.isSystem == true)).length;
-    final systemMessages = _messages.where((m) => m.isSystem == true).length;
+    final botMessages = _messages.where((m) => !m.isUser && !(m.isSystem == true)).length;
     final totalMessages = _messages.length;
+    
+    final topics = <String>[];
+    final keywords = ['heart', 'risk', 'cholesterol', 'blood pressure', 'symptom', 'treatment'];
+    for (var msg in _messages.where((m) => !m.isUser)) {
+      for (var keyword in keywords) {
+        if (msg.text.toLowerCase().contains(keyword) && !topics.contains(keyword)) {
+          topics.add(keyword);
+        }
+      }
+    }
+    
+    return '''
+📊 Conversation Summary:
+• ${userMessages} questions asked
+• ${botMessages} responses received
+• ${totalMessages} total messages
+${topics.isNotEmpty ? '• Topics discussed: ${topics.join(', ')}' : ''}
+''';
+  }
 
+  void _showConversationStats() {
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
@@ -846,21 +1248,24 @@ class _ChatbotScreenState extends State<ChatbotScreen>
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            _StatRow(label: 'Total Messages', value: '$totalMessages'),
-            _StatRow(label: 'Your Messages', value: '$userMessages'),
-            _StatRow(label: 'HeartBot Responses', value: '$botMessages'),
-            _StatRow(label: 'System Messages', value: '$systemMessages'),
+            const Text(
+              _getConversationSummary(),
+              style: TextStyle(fontSize: 13, height: 1.6),
+            ),
             const Divider(),
             _StatRow(
-                label: 'Patient Context',
-                value: _currentContext != null ? 'Active' : 'None'),
+              label: 'Patient Context',
+              value: _currentContext != null ? 'Active' : 'None',
+            ),
             _StatRow(
-                label: 'Conversation Length',
-                value: '${_chatbot.historyLength} exchanges'),
+              label: 'Conversation Length',
+              value: '${_chatbot.historyLength} exchanges',
+            ),
             if (_typingSpeed > 0)
               _StatRow(
-                  label: 'Avg Response Time',
-                  value: '${_typingSpeed}s'),
+                label: 'Avg Response Time',
+                value: '${_typingSpeed}s',
+              ),
           ],
         ),
         actions: [
@@ -873,6 +1278,18 @@ class _ChatbotScreenState extends State<ChatbotScreen>
     );
   }
 
+  String _formatTimeOnly(DateTime dt) {
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    final date = DateTime(dt.year, dt.month, dt.day);
+
+    if (date == today) {
+      return 'Today ${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}';
+    } else {
+      return '${dt.day}/${dt.month}/${dt.year} ${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}';
+    }
+  }
+
   // ==================== BUILD ====================
 
   @override
@@ -882,77 +1299,147 @@ class _ChatbotScreenState extends State<ChatbotScreen>
     final t = AppThemeTokens.of(context);
     final isDesktop = MediaQuery.of(context).size.width >= 900;
 
-    return Scaffold(
-      backgroundColor: t.bg,
-      appBar: _buildAppBar(r, t, isDesktop),
-      body: _buildBody(r, t, isDesktop),
+    return Focus(
+      onKey: (node, event) {
+        if (event.isKeyPressed(LogicalKeyboardKey.enter) && 
+            !event.isShiftPressed) {
+          _sendMessage();
+          return KeyEventResult.handled;
+        }
+        if (event.isKeyPressed(LogicalKeyboardKey.escape)) {
+          if (_editingMessageId != null) {
+            _cancelEditing();
+            return KeyEventResult.handled;
+          }
+          if (_isSearching) {
+            _toggleSearch();
+            return KeyEventResult.handled;
+          }
+        }
+        if (event.isKeyPressed(LogicalKeyboardKey.keyC) && 
+            event.isControlPressed) {
+          _copyLastResponse();
+          return KeyEventResult.handled;
+        }
+        if (event.isKeyPressed(LogicalKeyboardKey.keyF) && 
+            event.isControlPressed) {
+          _toggleSearch();
+          return KeyEventResult.handled;
+        }
+        return KeyEventResult.ignored;
+      },
+      child: Scaffold(
+        backgroundColor: t.bg,
+        appBar: _buildAppBar(r, t, isDesktop),
+        body: Stack(
+          children: [
+            _buildBody(r, t, isDesktop),
+            if (_showScrollToBottom)
+              Positioned(
+                bottom: r.sp(120),
+                right: r.hp,
+                child: FloatingActionButton(
+                  mini: true,
+                  backgroundColor: AppColors.sageGreen,
+                  onPressed: _scrollToBottom,
+                  child: const Icon(
+                    Icons.arrow_downward_rounded,
+                    color: Colors.white,
+                  ),
+                ),
+              ),
+          ],
+        ),
+      ),
     );
   }
 
-  PreferredSizeWidget _buildAppBar(Responsive r, AppThemeTokens t,
-      bool isDesktop) {
+  PreferredSizeWidget _buildAppBar(Responsive r, AppThemeTokens t, bool isDesktop) {
     return AppBar(
-      title: Row(
-        children: [
-          Container(
-            width: isDesktop ? 36 : r.wp(32),
-            height: isDesktop ? 36 : r.wp(32),
-            decoration: BoxDecoration(
-              color: AppColors.sageGreen.withOpacity(0.15),
-              shape: BoxShape.circle,
-            ),
-            child: Icon(
-              Icons.smart_toy_outlined,
-              color: AppColors.sageGreen,
-              size: isDesktop ? 18 : r.wp(17),
-            ),
-          ),
-          SizedBox(width: r.wp(10)),
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Text(
-                'HeartBot',
-                style: TextStyle(
-                  fontSize: isDesktop ? 16 : r.fs(16),
-                  fontWeight: FontWeight.w700,
-                  color: t.textPrimary,
+      title: _isSearching
+          ? Row(
+              children: [
+                Expanded(
+                  child: TextField(
+                    controller: _searchController,
+                    autofocus: true,
+                    decoration: InputDecoration(
+                      hintText: 'Search messages...',
+                      border: InputBorder.none,
+                      hintStyle: TextStyle(color: t.textMuted),
+                      prefixIcon: Icon(
+                        Icons.search_rounded,
+                        color: t.textMuted,
+                        size: r.sp(18),
+                      ),
+                    ),
+                    style: TextStyle(color: t.textPrimary),
+                    onChanged: (value) => setState(() => _searchQuery = value),
+                  ),
                 ),
-              ),
-              Row(
-                children: [
-                  Container(
-                    width: 6,
-                    height: 6,
-                    decoration: BoxDecoration(
-                      color: _chatbot.historyLength > 1
-                          ? Colors.green
-                          : Colors.orange,
-                      shape: BoxShape.circle,
-                    ),
+              ],
+            )
+          : Row(
+              children: [
+                Container(
+                  width: isDesktop ? 36 : r.wp(32),
+                  height: isDesktop ? 36 : r.wp(32),
+                  decoration: BoxDecoration(
+                    color: AppColors.sageGreen.withOpacity(0.15),
+                    shape: BoxShape.circle,
                   ),
-                  const SizedBox(width: 6),
-                  Text(
-                    _currentContext != null
-                        ? 'Patient context active'
-                        : _chatbot.historyLength > 1
-                            ? 'Active conversation'
-                            : 'Ready to help',
-                    style: TextStyle(
-                      fontSize: isDesktop ? 11 : r.fs(11),
-                      color: _currentContext != null
-                          ? AppColors.sageGreen
-                          : t.textMuted,
-                      fontWeight: FontWeight.w500,
-                    ),
+                  child: Icon(
+                    Icons.smart_toy_outlined,
+                    color: AppColors.sageGreen,
+                    size: isDesktop ? 18 : r.wp(17),
                   ),
-                ],
-              ),
-            ],
-          ),
-        ],
-      ),
+                ),
+                SizedBox(width: r.wp(10)),
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      'HeartBot',
+                      style: TextStyle(
+                        fontSize: isDesktop ? 16 : r.fs(16),
+                        fontWeight: FontWeight.w700,
+                        color: t.textPrimary,
+                      ),
+                    ),
+                    Row(
+                      children: [
+                        Container(
+                          width: 6,
+                          height: 6,
+                          decoration: BoxDecoration(
+                            color: _chatbot.historyLength > 1
+                                ? Colors.green
+                                : Colors.orange,
+                            shape: BoxShape.circle,
+                          ),
+                        ),
+                        const SizedBox(width: 6),
+                        Text(
+                          _currentContext != null
+                              ? 'Patient context active'
+                              : _chatbot.historyLength > 1
+                                  ? 'Active conversation'
+                                  : 'Ready to help',
+                          style: TextStyle(
+                            fontSize: isDesktop ? 11 : r.fs(11),
+                            color: _currentContext != null
+                                ? AppColors.sageGreen
+                                : t.textMuted,
+                            fontWeight: FontWeight.w500,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ],
+            ),
       backgroundColor: t.bg,
       elevation: 0,
       foregroundColor: t.textPrimary,
@@ -961,67 +1448,87 @@ class _ChatbotScreenState extends State<ChatbotScreen>
         child: Divider(height: 1, color: t.border),
       ),
       actions: [
-        // Stats
-        IconButton(
-          icon: Icon(Icons.bar_chart_rounded, color: t.textMuted),
-          onPressed: _messages.length > 1 ? _showConversationStats : null,
-          tooltip: 'Conversation Stats',
-        ),
-        // Knowledge base
-        IconButton(
-          icon: Icon(Icons.library_books_outlined, color: t.textMuted),
-          onPressed: _openKnowledgeBase,
-          tooltip: 'Knowledge Base',
-        ),
-        // Export
-        IconButton(
-          icon: Icon(Icons.share_outlined, color: t.textMuted),
-          onPressed: _messages.length > 1 ? _showExportOptions : null,
-          tooltip: 'Export conversation',
-        ),
-        // Saved conversations
-        IconButton(
-          icon: Icon(Icons.folder_outlined, color: t.textMuted),
-          onPressed: _viewSavedConversations,
-          tooltip: 'Saved conversations',
-        ),
-        // Copy last response
-        if (_messages.isNotEmpty && !_messages.last.isUser)
+        if (_isSearching)
           IconButton(
-            icon: Icon(Icons.copy_outlined, color: t.textMuted),
-            onPressed: _copyLastResponse,
-            tooltip: 'Copy last response',
+            icon: Icon(Icons.close_rounded, color: t.textMuted),
+            onPressed: _toggleSearch,
+            tooltip: 'Close search',
+          )
+        else ...[
+          // Search
+          IconButton(
+            icon: Icon(Icons.search_rounded, color: t.textMuted),
+            onPressed: _toggleSearch,
+            tooltip: 'Search messages',
           ),
-        // Clear chat
-        IconButton(
-          icon: Icon(
-            Icons.delete_outline,
-            color: _messages.length > 1 ? Colors.red.shade400 : t.textMuted,
+          // Stats
+          IconButton(
+            icon: Icon(Icons.bar_chart_rounded, color: t.textMuted),
+            onPressed: _messages.length > 1 ? _showConversationStats : null,
+            tooltip: 'Conversation Stats',
           ),
-          onPressed: _messages.length > 1 ? _clearChat : null,
-          tooltip: 'Clear chat history',
-        ),
-        // Clear context
-        if (_currentContext != null)
-          Padding(
-            padding: EdgeInsets.only(right: isDesktop ? 16 : r.wp(8)),
-            child: IconButton(
-              icon: Container(
-                padding: const EdgeInsets.all(6),
-                decoration: BoxDecoration(
-                  color: Colors.red.withOpacity(0.08),
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: Icon(
-                  Icons.clear_all,
-                  size: 16,
-                  color: Colors.red.shade400,
-                ),
-              ),
-              onPressed: _clearContext,
-              tooltip: 'Clear patient context',
+          // Knowledge base
+          IconButton(
+            icon: Icon(Icons.library_books_outlined, color: t.textMuted),
+            onPressed: _openKnowledgeBase,
+            tooltip: 'Knowledge Base',
+          ),
+          // Export
+          IconButton(
+            icon: Icon(Icons.share_outlined, color: t.textMuted),
+            onPressed: _messages.length > 1 ? _showExportOptions : null,
+            tooltip: 'Export conversation',
+          ),
+          // Saved conversations
+          IconButton(
+            icon: Icon(Icons.folder_outlined, color: t.textMuted),
+            onPressed: _viewSavedConversations,
+            tooltip: 'Saved conversations',
+          ),
+          // Copy full conversation
+          IconButton(
+            icon: Icon(Icons.copy_all_rounded, color: t.textMuted),
+            onPressed: _messages.length > 1 ? _copyFullConversation : null,
+            tooltip: 'Copy full conversation',
+          ),
+          // Copy last response
+          if (_messages.isNotEmpty && !_messages.last.isUser)
+            IconButton(
+              icon: Icon(Icons.copy_outlined, color: t.textMuted),
+              onPressed: _copyLastResponse,
+              tooltip: 'Copy last response',
             ),
+          // Clear chat
+          IconButton(
+            icon: Icon(
+              Icons.delete_outline,
+              color: _messages.length > 1 ? Colors.red.shade400 : t.textMuted,
+            ),
+            onPressed: _messages.length > 1 ? _clearChat : null,
+            tooltip: 'Clear chat history',
           ),
+          // Clear context
+          if (_currentContext != null)
+            Padding(
+              padding: EdgeInsets.only(right: isDesktop ? 16 : r.wp(8)),
+              child: IconButton(
+                icon: Container(
+                  padding: const EdgeInsets.all(6),
+                  decoration: BoxDecoration(
+                    color: Colors.red.withOpacity(0.08),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Icon(
+                    Icons.clear_all,
+                    size: 16,
+                    color: Colors.red.shade400,
+                  ),
+                ),
+                onPressed: _clearContext,
+                tooltip: 'Clear patient context',
+              ),
+            ),
+        ],
       ],
     );
   }
@@ -1040,10 +1547,16 @@ class _ChatbotScreenState extends State<ChatbotScreen>
                   ),
                 ),
                 if (_currentContext != null) ...[
-                  VerticalDivider(width: 1, thickness: 1,
-                      color: t.border.withOpacity(0.5)),
+                  VerticalDivider(
+                    width: 1,
+                    thickness: 1,
+                    color: t.border.withOpacity(0.5),
+                  ),
                   _PatientContextSidebar(
-                      contextData: _currentContext!, r: r, t: t),
+                    contextData: _currentContext!,
+                    r: r,
+                    t: t,
+                  ),
                 ],
               ],
             )
@@ -1052,8 +1565,24 @@ class _ChatbotScreenState extends State<ChatbotScreen>
   }
 
   Widget _buildChatContent(Responsive r, AppThemeTokens t) {
+    final messages = _isSearching ? _filteredMessages : _messages;
+
     return Column(
       children: [
+        if (_isSearching && _filteredMessages.isEmpty)
+          Container(
+            padding: EdgeInsets.symmetric(horizontal: r.hp, vertical: r.sp(12)),
+            color: Colors.grey.shade50,
+            child: Center(
+              child: Text(
+                'No messages found for "$_searchQuery"',
+                style: TextStyle(
+                  fontSize: r.fs(12),
+                  color: t.textMuted,
+                ),
+              ),
+            ),
+          ),
         Expanded(
           child: ListView.builder(
             controller: _scrollController,
@@ -1061,9 +1590,9 @@ class _ChatbotScreenState extends State<ChatbotScreen>
               horizontal: MediaQuery.of(context).size.width >= 900 ? 24 : r.hp,
               vertical: r.sp(16),
             ),
-            itemCount: _messages.length,
+            itemCount: messages.length,
             itemBuilder: (context, index) {
-              final message = _messages[index];
+              final message = messages[index];
               final showTimestamp = _shouldShowTimestamp(index);
 
               return Column(
@@ -1094,6 +1623,7 @@ class _ChatbotScreenState extends State<ChatbotScreen>
                     },
                     onEdit: message.isUser ? () => _startEditing(message.id, message.text) : null,
                     onDelete: () => _deleteMessage(message.id),
+                    onReaction: message.isUser ? null : (type) => _handleReaction(message.id, type),
                   ),
                 ],
               );
@@ -1109,14 +1639,19 @@ class _ChatbotScreenState extends State<ChatbotScreen>
             color: Colors.red.shade50,
             child: Row(
               children: [
-                Icon(Icons.error_outline, color: Colors.red.shade400,
-                    size: r.sp(16)),
+                Icon(
+                  Icons.error_outline,
+                  color: Colors.red.shade400,
+                  size: r.sp(16),
+                ),
                 const SizedBox(width: 8),
                 Expanded(
                   child: Text(
                     _errorMessage!,
-                    style: TextStyle(color: Colors.red.shade700,
-                        fontSize: r.fs(12)),
+                    style: TextStyle(
+                      color: Colors.red.shade700,
+                      fontSize: r.fs(12),
+                    ),
                   ),
                 ),
                 IconButton(
@@ -1135,14 +1670,19 @@ class _ChatbotScreenState extends State<ChatbotScreen>
             color: Colors.blue.shade50,
             child: Row(
               children: [
-                Icon(Icons.edit_rounded, color: Colors.blue.shade400,
-                    size: r.sp(16)),
+                Icon(
+                  Icons.edit_rounded,
+                  color: Colors.blue.shade400,
+                  size: r.sp(16),
+                ),
                 const SizedBox(width: 8),
                 Expanded(
                   child: Text(
                     'Editing message...',
-                    style: TextStyle(color: Colors.blue.shade700,
-                        fontSize: r.fs(12)),
+                    style: TextStyle(
+                      color: Colors.blue.shade700,
+                      fontSize: r.fs(12),
+                    ),
                   ),
                 ),
                 TextButton(
@@ -1152,24 +1692,12 @@ class _ChatbotScreenState extends State<ChatbotScreen>
               ],
             ),
           ),
-        // ==================== DISCLAIMER BANNER ====================
-        _buildDisclaimerBanner(r, t),  // ADD THIS
+        // Disclaimer banner
+        _buildDisclaimerBanner(r, t),
         // Input bar
         _buildInputBar(r, t),
       ],
     );
-  }
-
-  String _formatTimeOnly(DateTime dt) {
-    final now = DateTime.now();
-    final today = DateTime(now.year, now.month, now.day);
-    final date = DateTime(dt.year, dt.month, dt.day);
-
-    if (date == today) {
-      return 'Today ${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}';
-    } else {
-      return '${dt.day}/${dt.month}/${dt.year} ${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}';
-    }
   }
 
   Widget _buildTypingIndicator(Responsive r) {
@@ -1201,12 +1729,40 @@ class _ChatbotScreenState extends State<ChatbotScreen>
               SizedBox(width: r.wp(4)),
               _TypingDot(delay: 300),
               SizedBox(width: r.wp(8)),
-              Text(
-                'Thinking${_typingSpeed > 3 ? '...' : '.'}',
-                style: TextStyle(
-                  fontSize: r.fs(12),
-                  color: AppThemeTokens.of(context).textMuted,
-                ),
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    'HeartBot is thinking',
+                    style: TextStyle(
+                      fontSize: r.fs(12),
+                      color: AppThemeTokens.of(context).textMuted,
+                    ),
+                  ),
+                  if (_typingSpeed > 2)
+                    Container(
+                      width: 60,
+                      height: 2,
+                      decoration: BoxDecoration(
+                        color: AppColors.sageGreen.withOpacity(0.2),
+                        borderRadius: BorderRadius.circular(1),
+                      ),
+                      child: Stack(
+                        children: [
+                          AnimatedContainer(
+                            duration: const Duration(milliseconds: 500),
+                            width: (_typingSpeed > 5) ? 60 : _typingSpeed * 10,
+                            height: 2,
+                            decoration: BoxDecoration(
+                              color: AppColors.sageGreen,
+                              borderRadius: BorderRadius.circular(1),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                ],
               ),
             ],
           ),
@@ -1275,8 +1831,11 @@ class _ChatbotScreenState extends State<ChatbotScreen>
                           vertical: r.sp(12),
                         ),
                         prefixIcon: _editingMessageId != null
-                            ? Icon(Icons.edit_rounded,
-                                color: Colors.blue.shade400, size: r.sp(18))
+                            ? Icon(
+                                Icons.edit_rounded,
+                                color: Colors.blue.shade400,
+                                size: r.sp(18),
+                              )
                             : null,
                         suffixIcon: _messageController.text.isNotEmpty
                             ? IconButton(
@@ -1333,204 +1892,6 @@ class _ChatbotScreenState extends State<ChatbotScreen>
       ),
     );
   }
-
-Widget _buildDisclaimerBanner(Responsive r, AppThemeTokens t) {
-  return GestureDetector(
-    onTap: _showFullDisclaimer,
-    child: Container(
-      padding: EdgeInsets.symmetric(
-        horizontal: r.hp,
-        vertical: r.sp(6),
-      ),
-      decoration: BoxDecoration(
-        color: AppColors.sageGreen.withOpacity(0.06),
-        border: Border(
-          top: BorderSide(
-            color: AppColors.sageGreen.withOpacity(0.15),
-            width: 0.5,
-          ),
-        ),
-      ),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Icon(
-            Icons.medical_information_rounded,
-            color: AppColors.sageGreen.withOpacity(0.5),
-            size: r.sp(14),
-          ),
-          SizedBox(width: r.wp(6)),
-          Text(
-            'AI-generated, for clinical reference only',
-            style: TextStyle(
-              fontSize: r.fs(11),
-              color: t.textMuted.withOpacity(0.7),
-              fontWeight: FontWeight.w400,
-            ),
-          ),
-          SizedBox(width: r.wp(6)),
-          Container(
-            padding: EdgeInsets.symmetric(
-              horizontal: r.wp(4),
-              vertical: r.sp(2),
-            ),
-            decoration: BoxDecoration(
-              color: AppColors.sageGreen.withOpacity(0.1),
-              borderRadius: BorderRadius.circular(r.sp(12)),
-            ),
-            child: Text(
-              'Tap for info',
-              style: TextStyle(
-                fontSize: r.fs(9),
-                color: AppColors.sageGreen.withOpacity(0.6),
-                fontWeight: FontWeight.w500,
-              ),
-            ),
-          ),
-        ],
-      ),
-    ),
-  );
-}
-
-// Add this method to _ChatbotScreenState
-void _showFullDisclaimer() {
-  showModalBottomSheet(
-    context: context,
-    shape: const RoundedRectangleBorder(
-      borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-    ),
-    builder: (context) => SafeArea(
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          // Handle
-          Container(
-            margin: const EdgeInsets.only(top: 12),
-            width: 40,
-            height: 4,
-            decoration: BoxDecoration(
-              color: Colors.grey.shade300,
-              borderRadius: BorderRadius.circular(2),
-            ),
-          ),
-          const SizedBox(height: 16),
-          // Header
-          const Padding(
-            padding: EdgeInsets.symmetric(horizontal: 20),
-            child: Row(
-              children: [
-                Icon(
-                  Icons.medical_information_rounded,
-                  color: AppColors.sageGreen,
-                  size: 24,
-                ),
-                SizedBox(width: 12),
-                Expanded(
-                  child: Text(
-                    '⚠️ Medical Disclaimer',
-                    style: TextStyle(
-                      fontSize: 18,
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-          const Divider(),
-          // Content
-          const Padding(
-            padding: EdgeInsets.all(20),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  'HeartBot is an AI-powered clinical support tool.',
-                  style: TextStyle(
-                    fontSize: 14,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-                SizedBox(height: 12),
-                Text(
-                  '• This is NOT a medical diagnosis.',
-                  style: TextStyle(fontSize: 13, height: 1.6),
-                ),
-                Text(
-                  '• Always consult a qualified healthcare professional.',
-                  style: TextStyle(fontSize: 13, height: 1.6),
-                ),
-                Text(
-                  '• Information is for educational and reference purposes only.',
-                  style: TextStyle(fontSize: 13, height: 1.6),
-                ),
-                Text(
-                  '• Clinical judgment should always take precedence.',
-                  style: TextStyle(fontSize: 13, height: 1.6),
-                ),
-                Text(
-                  '• Verify all information before clinical use.',
-                  style: TextStyle(fontSize: 13, height: 1.6),
-                ),
-                Text(
-                  '• Never rely solely on AI for medical decisions.',
-                  style: TextStyle(fontSize: 13, height: 1.6),
-                ),
-                Text(
-                  '• In emergencies, call emergency services immediately.',
-                  style: TextStyle(fontSize: 13, height: 1.6),
-                ),
-                Text(
-                  '• Your use of this tool is at your own risk.',
-                  style: TextStyle(fontSize: 13, height: 1.6),
-                ),
-                SizedBox(height: 12),
-                Container(
-                  padding: EdgeInsets.all(12),
-                  decoration: BoxDecoration(
-                    color: Colors.orange,
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  child: Text(
-                    '⚠️ This AI tool is not a substitute for professional medical advice, diagnosis, or treatment.',
-                    style: TextStyle(
-                      fontSize: 13,
-                      color: Colors.white,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-          SizedBox(height: 20),
-          Padding(
-            padding: EdgeInsets.symmetric(horizontal: 20, vertical: 12),
-            child: SizedBox(
-              width: double.infinity,
-              child: ElevatedButton(
-                onPressed: () => Navigator.pop(context),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: AppColors.sageGreen,
-                  foregroundColor: Colors.white,
-                  padding: const EdgeInsets.symmetric(vertical: 14),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                ),
-                child: const Text('I Understand'),
-              ),
-            ),
-          ),
-          const SizedBox(height: 8),
-        ],
-      ),
-    ),
-  );
-}
-
-
 }
 
 // ==================== STAT ROW ====================
@@ -1675,7 +2036,6 @@ class _SavedConversationsSheetState extends State<_SavedConversationsSheet> {
       ),
       child: Column(
         children: [
-          // Handle
           Container(
             margin: const EdgeInsets.only(top: 12),
             width: 40,
@@ -1685,7 +2045,6 @@ class _SavedConversationsSheetState extends State<_SavedConversationsSheet> {
               borderRadius: BorderRadius.circular(2),
             ),
           ),
-          // Header
           Padding(
             padding: const EdgeInsets.fromLTRB(20, 16, 20, 8),
             child: Row(
@@ -1732,7 +2091,6 @@ class _SavedConversationsSheetState extends State<_SavedConversationsSheet> {
               ],
             ),
           ),
-          // Search bar
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 20),
             child: TextField(
@@ -1759,7 +2117,6 @@ class _SavedConversationsSheetState extends State<_SavedConversationsSheet> {
             ),
           ),
           const SizedBox(height: 8),
-          // Sort options
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 20),
             child: Row(
@@ -1790,7 +2147,6 @@ class _SavedConversationsSheetState extends State<_SavedConversationsSheet> {
             ),
           ),
           const Divider(height: 16),
-          // List
           Expanded(
             child: _filteredConversations.isEmpty
                 ? Center(
@@ -2101,6 +2457,7 @@ class _ChatBubble extends StatelessWidget {
   final VoidCallback? onCopy;
   final VoidCallback? onEdit;
   final VoidCallback? onDelete;
+  final Function(String)? onReaction;
 
   const _ChatBubble({
     required this.message,
@@ -2109,6 +2466,7 @@ class _ChatBubble extends StatelessWidget {
     this.onCopy,
     this.onEdit,
     this.onDelete,
+    this.onReaction,
   });
 
   @override
@@ -2137,7 +2495,6 @@ class _ChatBubble extends StatelessWidget {
                   ),
                 ),
                 const SizedBox(height: 16),
-                // Copy
                 ListTile(
                   leading: const Icon(Icons.copy_rounded),
                   title: const Text('Copy'),
@@ -2146,7 +2503,6 @@ class _ChatBubble extends StatelessWidget {
                     onCopy?.call();
                   },
                 ),
-                // Edit (only for user messages)
                 if (isUser)
                   ListTile(
                     leading: const Icon(Icons.edit_rounded),
@@ -2156,7 +2512,6 @@ class _ChatBubble extends StatelessWidget {
                       onEdit?.call();
                     },
                   ),
-                // Delete
                 ListTile(
                   leading: Icon(Icons.delete_rounded, color: Colors.red),
                   title: const Text('Delete'),
@@ -2176,57 +2531,66 @@ class _ChatBubble extends StatelessWidget {
         child: Column(
           crossAxisAlignment: isUser ? CrossAxisAlignment.end : CrossAxisAlignment.start,
           children: [
-            Container(
-              margin: EdgeInsets.only(
-                top: r.sp(4),
-                bottom: r.sp(2),
-                left: isUser ? (isDesktop ? 120 : r.wp(48)) : 0,
-                right: isUser ? 0 : (isDesktop ? 120 : r.wp(48)),
-              ),
-              padding: EdgeInsets.symmetric(
-                horizontal: r.wp(14),
-                vertical: r.sp(11),
-              ),
-              decoration: BoxDecoration(
-                color: isUser
-                    ? AppColors.sageGreen
-                    : message.isError == true
-                        ? Colors.red.shade50
-                        : t.card,
-                borderRadius: BorderRadius.only(
-                  topLeft: Radius.circular(r.sp(18)),
-                  topRight: Radius.circular(r.sp(18)),
-                  bottomLeft: Radius.circular(isUser ? r.sp(18) : r.sp(4)),
-                  bottomRight: Radius.circular(isUser ? r.sp(4) : r.sp(18)),
-                ),
-                border: isUser
-                    ? null
-                    : Border.all(
-                        color: message.isError == true
-                            ? Colors.red.shade200
-                            : AppColors.sageGreen.withOpacity(0.20),
+            Row(
+              mainAxisAlignment: isUser ? MainAxisAlignment.end : MainAxisAlignment.start,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                if (!isUser) _buildBotAvatar(),
+                Flexible(
+                  child: Container(
+                    margin: EdgeInsets.only(
+                      top: r.sp(4),
+                      bottom: r.sp(2),
+                      left: isUser ? (isDesktop ? 120 : r.wp(48)) : 0,
+                      right: isUser ? 0 : (isDesktop ? 120 : r.wp(48)),
+                    ),
+                    padding: EdgeInsets.symmetric(
+                      horizontal: r.wp(14),
+                      vertical: r.sp(11),
+                    ),
+                    decoration: BoxDecoration(
+                      color: isUser
+                          ? AppColors.sageGreen
+                          : message.isError == true
+                              ? Colors.red.shade50
+                              : t.card,
+                      borderRadius: BorderRadius.only(
+                        topLeft: Radius.circular(r.sp(18)),
+                        topRight: Radius.circular(r.sp(18)),
+                        bottomLeft: Radius.circular(isUser ? r.sp(18) : r.sp(4)),
+                        bottomRight: Radius.circular(isUser ? r.sp(4) : r.sp(18)),
                       ),
-                boxShadow: [
-                  BoxShadow(
-                    color: (isUser ? AppColors.sageGreen : t.textPrimary)
-                        .withOpacity(0.08),
-                    blurRadius: 8,
-                    offset: const Offset(0, 2),
+                      border: isUser
+                          ? null
+                          : Border.all(
+                              color: message.isError == true
+                                  ? Colors.red.shade200
+                                  : AppColors.sageGreen.withOpacity(0.20),
+                            ),
+                      boxShadow: [
+                        BoxShadow(
+                          color: (isUser ? AppColors.sageGreen : t.textPrimary)
+                              .withOpacity(0.08),
+                          blurRadius: 8,
+                          offset: const Offset(0, 2),
+                        ),
+                      ],
+                    ),
+                    child: Text(
+                      message.text,
+                      style: TextStyle(
+                        color: isUser
+                            ? Colors.white
+                            : message.isError == true
+                                ? Colors.red.shade700
+                                : t.textPrimary,
+                        fontSize: r.fs(14),
+                        height: 1.45,
+                      ),
+                    ),
                   ),
-                ],
-              ),
-              child: Text(
-                message.text,
-                style: TextStyle(
-                  color: isUser
-                      ? Colors.white
-                      : message.isError == true
-                          ? Colors.red.shade700
-                          : t.textPrimary,
-                  fontSize: r.fs(14),
-                  height: 1.45,
                 ),
-              ),
+              ],
             ),
             Padding(
               padding: EdgeInsets.only(
@@ -2252,10 +2616,55 @@ class _ChatBubble extends StatelessWidget {
                       color: t.textMuted,
                     ),
                   ),
+                  if (!isUser && onReaction != null && message.isError != true) ...[
+                    SizedBox(width: r.wp(4)),
+                    IconButton(
+                      icon: Icon(
+                        Icons.thumb_up_outlined,
+                        size: r.sp(12),
+                        color: Colors.grey.shade400,
+                      ),
+                      onPressed: () => onReaction?.call('like'),
+                      padding: EdgeInsets.zero,
+                      constraints: const BoxConstraints(),
+                    ),
+                    IconButton(
+                      icon: Icon(
+                        Icons.thumb_down_outlined,
+                        size: r.sp(12),
+                        color: Colors.grey.shade400,
+                      ),
+                      onPressed: () => onReaction?.call('dislike'),
+                      padding: EdgeInsets.zero,
+                      constraints: const BoxConstraints(),
+                    ),
+                  ],
                 ],
               ),
             ),
           ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildBotAvatar() {
+    return Container(
+      width: r.wp(32),
+      height: r.wp(32),
+      margin: EdgeInsets.only(right: r.wp(8)),
+      decoration: BoxDecoration(
+        color: AppColors.sageGreen.withOpacity(0.12),
+        shape: BoxShape.circle,
+        border: Border.all(
+          color: AppColors.sageGreen.withOpacity(0.2),
+          width: 1.5,
+        ),
+      ),
+      child: Center(
+        child: Text(
+          '⚕️',
+          style: TextStyle(fontSize: r.fs(16)),
         ),
       ),
     );
@@ -2398,7 +2807,6 @@ HAS-BLED Score (Bleeding Risk):
       ),
       child: Column(
         children: [
-          // Handle
           Container(
             margin: const EdgeInsets.only(top: 12),
             width: 40,
@@ -2408,7 +2816,6 @@ HAS-BLED Score (Bleeding Risk):
               borderRadius: BorderRadius.circular(2),
             ),
           ),
-          // Header
           Padding(
             padding: const EdgeInsets.fromLTRB(20, 16, 20, 8),
             child: Row(
@@ -2465,7 +2872,6 @@ HAS-BLED Score (Bleeding Risk):
               ],
             ),
           ),
-          // Search bar
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 20),
             child: TextField(
@@ -2492,7 +2898,6 @@ HAS-BLED Score (Bleeding Risk):
             ),
           ),
           const Divider(height: 16),
-          // List
           Expanded(
             child: _filteredEntries.isEmpty
                 ? Center(
@@ -2673,7 +3078,6 @@ class _PatientContextSidebar extends StatelessWidget {
             child: ListView(
               padding: const EdgeInsets.all(20),
               children: [
-                // Demographics Card
                 _SidebarCard(
                   title: 'Demographics',
                   icon: Icons.person_outline_rounded,
@@ -2694,8 +3098,6 @@ class _PatientContextSidebar extends StatelessWidget {
                   ],
                 ),
                 const SizedBox(height: 16),
-
-                // Risk Metrics Card
                 _SidebarCard(
                   title: 'Risk Assessment',
                   icon: Icons.analytics_outlined,
@@ -2761,8 +3163,6 @@ class _PatientContextSidebar extends StatelessWidget {
                   ],
                 ),
                 const SizedBox(height: 16),
-
-                // Clinical Vitals Card
                 _SidebarCard(
                   title: 'Vitals & Measurements',
                   icon: Icons.heart_broken_outlined,
