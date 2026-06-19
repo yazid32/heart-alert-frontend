@@ -8,7 +8,10 @@ import '../services/conversation_manager.dart';
 import '../theme/app_theme.dart';
 import '../utils/responsive_utils.dart';
 import '../models/chat_message.dart';
-
+import 'package:flutter/services.dart';
+import 'dart:io';
+import 'package:share_plus/share_plus.dart';
+import 'package:path_provider/path_provider.dart';
 class ChatbotScreen extends StatefulWidget {
   final Map<String, dynamic>? initialContext;
   const ChatbotScreen({super.key, this.initialContext});
@@ -263,6 +266,7 @@ class _ChatbotScreenState extends State<ChatbotScreen> with AutomaticKeepAliveCl
     );
   }
 
+  // Replace the _exportConversation method
   void _exportConversation() async {
     if (_messages.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -271,78 +275,197 @@ class _ChatbotScreenState extends State<ChatbotScreen> with AutomaticKeepAliveCl
       return;
     }
 
-    // Save current conversation
-    final conversationId = DateTime.now().toIso8601String();
-    await ConversationManager.saveConversation(conversationId, _messages);
-    
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text('✅ Conversation exported successfully'),
-        backgroundColor: Colors.green,
-      ),
-    );
-  }
-
-  void _viewSavedConversations() {
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('💾 Saved Conversations'),
-        content: const Text(
-          'Feature coming soon!\n\n'
-          'This will allow you to:\n'
-          '• View all your saved conversations\n'
-          '• Load previous conversations\n'
-          '• Delete old conversations\n'
-          '• Export conversations as text files'
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Close'),
-          ),
-        ],
-      ),
-    );
-  }
-
-  void _openKnowledgeBase() {
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('📚 Medical Knowledge Base'),
-        content: const Text(
-          'Feature coming soon!\n\n'
-          'This will include:\n'
-          '• ECG Interpretation Guidelines\n'
-          '• Cholesterol Management\n'
-          '• Blood Pressure Classification\n'
-          '• Cardiac Risk Factors\n'
-          '• Treatment Protocols\n'
-          '• And more clinical references...'
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Close'),
-          ),
-        ],
-      ),
-    );
-  }
-
-  void _copyLastResponse() {
-    if (_messages.isNotEmpty) {
-      final lastMessage = _messages.lastWhere(
-        (msg) => !msg.isUser,
-        orElse: () => _messages.last,
+    try {
+      // Build the conversation text
+      final StringBuffer buffer = StringBuffer();
+      buffer.writeln('═══════════════════════════════════════════════════');
+      buffer.writeln('  HEARTBOT CONVERSATION EXPORT');
+      buffer.writeln('  Exported: ${DateTime.now().toLocal()}');
+      buffer.writeln('═══════════════════════════════════════════════════\n');
+      
+      for (var message in _messages) {
+        final prefix = message.isUser ? '👤 Doctor' : '🤖 HeartBot';
+        final time = '${message.timestamp.hour.toString().padLeft(2, '0')}:${message.timestamp.minute.toString().padLeft(2, '0')}';
+        
+        // Skip system messages (welcome, context) from export
+        if (message.isSystem == true && !message.isUser) {
+          continue;
+        }
+        
+        buffer.writeln('[$time] $prefix:');
+        buffer.writeln(message.text);
+        buffer.writeln('─' * 50);
+        buffer.writeln();
+      }
+      
+      buffer.writeln('═══════════════════════════════════════════════════');
+      buffer.writeln('  End of conversation');
+      buffer.writeln('  Total messages: ${_messages.where((m) => !(m.isSystem == true && !m.isUser)).length}');
+      buffer.writeln('═══════════════════════════════════════════════════');
+      
+      final text = buffer.toString();
+      
+      // Save to file
+      final directory = await getTemporaryDirectory();
+      final fileName = 'HeartBot_Conversation_${DateTime.now().millisecondsSinceEpoch}.txt';
+      final file = File('${directory.path}/$fileName');
+      await file.writeAsString(text);
+      
+      // Share the file
+      final result = await Share.shareXFiles(
+        [XFile(file.path)],
+        text: 'HeartBot Conversation Export',
       );
       
-      // Actually copy to clipboard
+      // Check if share was successful
+      if (result.status == ShareResultStatus.success) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('✅ Conversation exported and shared successfully'),
+            backgroundColor: Colors.green,
+          ),
+        );
+      }
+    } catch (e) {
+      print('Export error: $e');
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('📋 Response copied to clipboard')),
+        SnackBar(
+          content: Text('Failed to export: ${e.toString()}'),
+          backgroundColor: Colors.red,
+        ),
       );
     }
+  }
+
+  void _viewSavedConversations() async {
+    try {
+      final conversationIds = await ConversationManager.getConversationList();
+      
+      if (conversationIds.isEmpty) {
+        showDialog(
+          context: context,
+          builder: (context) => AlertDialog(
+            title: const Text('💾 Saved Conversations'),
+            content: const Text('No saved conversations found.\n\nChat with HeartBot and export your conversations to save them.'),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context),
+                child: const Text('OK'),
+              ),
+            ],
+          ),
+        );
+        return;
+      }
+
+      showModalBottomSheet(
+        context: context,
+        isScrollControlled: true,
+        backgroundColor: Colors.transparent,
+        builder: (context) => _SavedConversationsSheet(
+          conversationIds: conversationIds,
+          onLoad: _loadConversation,
+          onDelete: _deleteConversation,
+        ),
+      );
+    } catch (e) {
+      print('Error loading saved conversations: $e');
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Error loading conversations: $e'),
+          backgroundColor: Colors.red,
+        ),
+      );
+    }
+  }
+
+  Future<void> _loadConversation(String id) async {
+    try {
+      final messages = await ConversationManager.loadConversation(id);
+      if (messages.isNotEmpty) {
+        setState(() {
+          _messages.clear();
+          _messages.addAll(messages);
+          _chatbot.clearHistory();
+          // Rebuild the chat history for the service
+          for (var msg in _messages) {
+            if (msg.isUser) {
+              // Add user messages back to history
+              // The service will rebuild its history
+            }
+          }
+        });
+        _savePersistedMessages();
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('✅ Conversation loaded successfully'),
+            backgroundColor: Colors.green,
+          ),
+        );
+        Navigator.pop(context);
+      }
+    } catch (e) {
+      print('Error loading conversation: $e');
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Error loading: $e'),
+          backgroundColor: Colors.red,
+        ),
+      );
+    }
+  }
+
+  Future<void> _deleteConversation(String id) async {
+    try {
+      await ConversationManager.deleteConversation(id);
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('🗑️ Conversation deleted'),
+          backgroundColor: Colors.orange,
+        ),
+      );
+      // Refresh the list
+      _viewSavedConversations();
+    } catch (e) {
+      print('Error deleting conversation: $e');
+    }
+  }
+  
+  void _openKnowledgeBase() {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (context) => const _KnowledgeBaseSheet(),
+    );
+  }
+
+  // Replace the _copyLastResponse method
+  void _copyLastResponse() {
+    if (_messages.isEmpty) return;
+    
+    // Find the last bot message
+    final lastMessage = _messages.lastWhere(
+      (msg) => !msg.isUser,
+      orElse: () => _messages.last,
+    );
+    
+    // Copy to clipboard
+    Clipboard.setData(ClipboardData(text: lastMessage.text)).then((_) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('📋 Response copied to clipboard'),
+          duration: Duration(seconds: 2),
+        ),
+      );
+    }).catchError((e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Failed to copy: $e'),
+          backgroundColor: Colors.red,
+        ),
+      );
+    });
   }
 
   // ==================== BUILD ====================
@@ -437,6 +560,7 @@ class _ChatbotScreenState extends State<ChatbotScreen> with AutomaticKeepAliveCl
           tooltip: 'Knowledge Base',
         ),
         // Export
+      
         IconButton(
           icon: Icon(Icons.share_outlined, color: t.textMuted),
           onPressed: _messages.length > 1 ? _exportConversation : null,
@@ -756,6 +880,166 @@ class _TypingDotState extends State<_TypingDot> with SingleTickerProviderStateMi
     );
   }
 }
+// ==================== SAVED CONVERSATIONS SHEET ====================
+
+class _SavedConversationsSheet extends StatelessWidget {
+  final List<String> conversationIds;
+  final Function(String) onLoad;
+  final Function(String) onDelete;
+
+  const _SavedConversationsSheet({
+    required this.conversationIds,
+    required this.onLoad,
+    required this.onDelete,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final r = Responsive.of(context);
+    final t = AppThemeTokens.of(context);
+
+    return Container(
+      height: MediaQuery.of(context).size.height * 0.7,
+      decoration: BoxDecoration(
+        color: t.bg,
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      child: Column(
+        children: [
+          Container(
+            margin: const EdgeInsets.only(top: 12),
+            width: 40,
+            height: 4,
+            decoration: BoxDecoration(
+              color: t.textMuted.withOpacity(0.3),
+              borderRadius: BorderRadius.circular(2),
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(20, 16, 20, 8),
+            child: Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: Colors.blue.withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Icon(
+                    Icons.folder_rounded,
+                    color: Colors.blue,
+                    size: 24,
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Saved Conversations',
+                        style: TextStyle(
+                          fontSize: r.fs(18),
+                          fontWeight: FontWeight.w800,
+                          color: t.textPrimary,
+                        ),
+                      ),
+                      Text(
+                        '${conversationIds.length} conversations saved',
+                        style: TextStyle(
+                          fontSize: r.fs(12),
+                          color: t.textMuted,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                IconButton(
+                  icon: Icon(Icons.close_rounded, color: t.textMuted),
+                  onPressed: () => Navigator.pop(context),
+                ),
+              ],
+            ),
+          ),
+          const Divider(height: 1),
+          Expanded(
+            child: ListView.builder(
+              padding: const EdgeInsets.all(16),
+              itemCount: conversationIds.length,
+              itemBuilder: (context, index) {
+                final id = conversationIds[index];
+                final date = id.split('T').first;
+                final time = id.split('T').last.substring(0, 8);
+                
+                return Container(
+                  margin: const EdgeInsets.only(bottom: 8),
+                  decoration: BoxDecoration(
+                    color: t.card,
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: t.border.withOpacity(0.5)),
+                  ),
+                  child: ListTile(
+                    leading: Container(
+                      padding: const EdgeInsets.all(8),
+                      decoration: BoxDecoration(
+                        color: Colors.blue.withOpacity(0.1),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: Icon(
+                        Icons.chat_bubble_outline_rounded,
+                        color: Colors.blue,
+                        size: 20,
+                      ),
+                    ),
+                    title: Text(
+                      'Conversation',
+                      style: TextStyle(
+                        fontSize: r.fs(14),
+                        fontWeight: FontWeight.w600,
+                        color: t.textPrimary,
+                      ),
+                    ),
+                    subtitle: Text(
+                      '$date at $time',
+                      style: TextStyle(
+                        fontSize: r.fs(12),
+                        color: t.textMuted,
+                      ),
+                    ),
+                    trailing: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        IconButton(
+                          icon: Icon(
+                            Icons.download_rounded,
+                            color: AppColors.sageGreen,
+                            size: 20,
+                          ),
+                          onPressed: () => onLoad(id),
+                          tooltip: 'Load conversation',
+                        ),
+                        IconButton(
+                          icon: Icon(
+                            Icons.delete_outline_rounded,
+                            color: Colors.red.shade400,
+                            size: 20,
+                          ),
+                          onPressed: () => onDelete(id),
+                          tooltip: 'Delete conversation',
+                        ),
+                      ],
+                    ),
+                  ),
+                );
+              },
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 
 // ==================== CHAT BUBBLE ====================
 
@@ -869,6 +1153,280 @@ class _ChatBubble extends StatelessWidget {
     return '$h:$m';
   }
 }
+// ==================== KNOWLEDGE BASE SHEET ====================
+
+class _KnowledgeBaseSheet extends StatelessWidget {
+  const _KnowledgeBaseSheet({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    final r = Responsive.of(context);
+    final t = AppThemeTokens.of(context);
+    
+    // Updated knowledge entries with correct icon names
+final knowledgeEntries = [
+  {
+    'title': 'ECG Interpretation',
+    'icon': Icons.favorite_rounded, // Changed from ecg_heart_rounded (doesn't exist)
+    'content': '''
+• ST depression ≥ 2mm: Myocardial ischemia (ACC/AHA 2022)
+• ST elevation: Acute MI (Class I, Level A)
+• T-wave inversion: Ischemia or strain pattern
+• Q waves: Previous MI
+• PR interval > 200ms: 1st degree AV block
+• QTc > 440ms: Prolonged QT interval
+''',
+    'source': 'ACC/AHA Guidelines 2022',
+  },
+  {
+    'title': 'Cholesterol Guidelines',
+    'icon': Icons.bloodtype, // Changed from blood_rounded (doesn't exist)
+    'content': '''
+ESC/EAS 2019 Guidelines:
+
+RISK CATEGORY → LDL TARGET:
+• Very High Risk: < 55 mg/dL (Class I, Level A)
+• High Risk: < 70 mg/dL (Class I, Level A)
+• Moderate Risk: < 100 mg/dL (Class IIa, Level C)
+• Low Risk: < 116 mg/dL (Class IIa, Level C)
+
+Total Cholesterol: < 190 mg/dL
+''',
+    'source': 'ESC/EAS Guidelines 2019',
+  },
+  {
+    'title': 'Blood Pressure Classification',
+    'icon': Icons.heart_broken_rounded,
+    'content': '''
+ESC/ESH 2018 Classification:
+• Optimal: < 120/80 mmHg
+• Normal: 120-129/80-84 mmHg
+• High Normal: 130-139/85-89 mmHg
+• Grade 1 HTN: 140-159/90-99 mmHg
+• Grade 2 HTN: 160-179/100-109 mmHg
+• Grade 3 HTN: ≥ 180/110 mmHg
+''',
+    'source': 'ESC/ESH Guidelines 2018',
+  },
+  {
+    'title': 'Chest Pain Types',
+    'icon': Icons.medical_services_rounded,
+    'content': '''
+• Type 0 - Typical Angina: Substernal, exertion-related
+• Type 1 - Atypical Angina: Atypical features
+• Type 2 - Non-anginal: Not cardiac-related
+• Type 3 - Asymptomatic: Silent ischemia
+
+For ACS suspicion: ECG within 10 min, Troponin at 0h and 3h
+''',
+    'source': 'ACC/AHA Guidelines',
+  },
+  {
+    'title': 'Heart Failure Classification',
+    'icon': Icons.favorite_rounded,
+    'content': '''
+NYHA Classification:
+• Class I: No limitation
+• Class II: Slight limitation
+• Class III: Marked limitation
+• Class IV: Symptoms at rest
+
+ACC/AHA Stages:
+• Stage A: At risk
+• Stage B: Structural heart disease
+• Stage C: Symptoms
+• Stage D: Refractory symptoms
+''',
+    'source': 'ACC/AHA Guidelines',
+  },
+  {
+    'title': 'Anticoagulation Guidelines',
+    'icon': Icons.bloodtype, // Changed from blood_rounded (doesn't exist)
+    'content': '''
+CHA₂DS₂-VASc Score (Atrial Fibrillation):
+• Score ≥ 2: OAC recommended
+• Score 1: OAC should be considered
+• Score 0: No antithrombotic therapy
+
+HAS-BLED Score (Bleeding Risk):
+• Score ≥ 3: High bleeding risk
+''',
+    'source': 'ESC Guidelines 2020',
+  },
+];
+
+    return Container(
+      height: MediaQuery.of(context).size.height * 0.85,
+      decoration: BoxDecoration(
+        color: t.bg,
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      child: Column(
+        children: [
+          // Handle
+          Container(
+            margin: const EdgeInsets.only(top: 12),
+            width: 40,
+            height: 4,
+            decoration: BoxDecoration(
+              color: t.textMuted.withOpacity(0.3),
+              borderRadius: BorderRadius.circular(2),
+            ),
+          ),
+          // Header
+          Padding(
+            padding: const EdgeInsets.fromLTRB(20, 16, 20, 8),
+            child: Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: AppColors.sageGreen.withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Icon(
+                    Icons.library_books_rounded,
+                    color: AppColors.sageGreen,
+                    size: 24,
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Medical Knowledge Base',
+                        style: TextStyle(
+                          fontSize: r.fs(18),
+                          fontWeight: FontWeight.w800,
+                          color: t.textPrimary,
+                        ),
+                      ),
+                      Text(
+                        'Clinical guidelines & references',
+                        style: TextStyle(
+                          fontSize: r.fs(12),
+                          color: t.textMuted,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                IconButton(
+                  icon: Icon(Icons.close_rounded, color: t.textMuted),
+                  onPressed: () => Navigator.pop(context),
+                ),
+              ],
+            ),
+          ),
+          const Divider(height: 1),
+          // List
+          Expanded(
+            child: ListView.builder(
+              padding: const EdgeInsets.all(16),
+              itemCount: knowledgeEntries.length,
+              itemBuilder: (context, index) {
+                final entry = knowledgeEntries[index];
+                return Container(
+                  margin: const EdgeInsets.only(bottom: 12),
+                  decoration: BoxDecoration(
+                    color: t.card,
+                    borderRadius: BorderRadius.circular(16),
+                    border: Border.all(color: t.border.withOpacity(0.5)),
+                  ),
+                  child: Theme(
+                    data: Theme.of(context).copyWith(
+                      dividerColor: Colors.transparent,
+                    ),
+                    child: ExpansionTile(
+                      leading: Container(
+                        padding: const EdgeInsets.all(8),
+                        decoration: BoxDecoration(
+                          color: AppColors.sageGreen.withOpacity(0.1),
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                        child: Icon(
+                          entry['icon'] as IconData,
+                          color: AppColors.sageGreen,
+                          size: 20,
+                        ),
+                      ),
+                      title: Text(
+                        entry['title'] as String,
+                        style: TextStyle(
+                          fontSize: r.fs(14),
+                          fontWeight: FontWeight.w700,
+                          color: t.textPrimary,
+                        ),
+                      ),
+                      subtitle: Text(
+                        entry['source'] as String,
+                        style: TextStyle(
+                          fontSize: r.fs(11),
+                          color: t.textMuted,
+                        ),
+                      ),
+                      children: [
+                        Padding(
+                          padding: const EdgeInsets.all(16),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                entry['content'] as String,
+                                style: TextStyle(
+                                  fontSize: r.fs(13),
+                                  height: 1.6,
+                                  color: t.textPrimary,
+                                ),
+                              ),
+                              const SizedBox(height: 12),
+                              Container(
+                                padding: const EdgeInsets.all(8),
+                                decoration: BoxDecoration(
+                                  color: AppColors.sageGreen.withOpacity(0.05),
+                                  borderRadius: BorderRadius.circular(8),
+                                  border: Border.all(
+                                    color: AppColors.sageGreen.withOpacity(0.1),
+                                  ),
+                                ),
+                                child: Row(
+                                  children: [
+                                    Icon(
+                                      Icons.info_outline_rounded,
+                                      color: AppColors.sageGreen,
+                                      size: 14,
+                                    ),
+                                    const SizedBox(width: 8),
+                                    Expanded(
+                                      child: Text(
+                                        'Source: ${entry['source']}',
+                                        style: TextStyle(
+                                          fontSize: r.fs(11),
+                                          color: t.textMuted,
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                );
+              },
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 
 // ==================== PATIENT CONTEXT SIDEBAR ====================
 
