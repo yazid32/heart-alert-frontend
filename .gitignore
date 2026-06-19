@@ -1,0 +1,37 @@
+# Flutter specific
+.dart_tool/
+.idea/
+.vscode/
+build/
+*.iml
+*.lock
+*.log
+*.pid
+*.tmp
+*.swp
+*.swo
+
+# Android
+android/.gradle/
+android/.idea/
+android/build/
+android/app/build/
+
+# iOS
+ios/Flutter/App.framework/
+ios/Flutter/Flutter.framework/
+ios/Flutter/Generated.xcconfig
+ios/Pods/
+ios/ios-simulator/
+
+# Web
+web/
+
+# Test
+coverage/
+test/.test_coverage.dart
+
+# Environment
+.env
+*.env
+.env.*
