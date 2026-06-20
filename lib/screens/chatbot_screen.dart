@@ -8,6 +8,8 @@ import 'package:uuid/uuid.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
+import 'package:pdf/pdf.dart';
+import 'package:pdf/widgets.dart' as pw;
 import '../services/chatbot_service.dart';
 import '../services/conversation_manager.dart';
 import '../theme/app_theme.dart';
@@ -42,14 +44,15 @@ class _ChatbotScreenState extends State<ChatbotScreen>
   bool _isSearching = false;
   String _searchQuery = '';
   final TextEditingController _searchController = TextEditingController();
-
-  // ==================== LIFECYCLE ====================
+  bool _isListening = false;
+  String? _userName;
 
   @override
   void initState() {
     super.initState();
     _chatbot = ChatbotService();
     _loadPersistedMessages();
+    _loadUserPreferences();
     _addWelcomeMessage();
 
     if (widget.initialContext != null) {
@@ -70,7 +73,23 @@ class _ChatbotScreenState extends State<ChatbotScreen>
     super.dispose();
   }
 
-  // ==================== PERSISTENCE ====================
+  Future<void> _loadUserPreferences() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      _userName = prefs.getString('chatbot_user_name');
+    } catch (e) {
+      print('Error loading preferences: $e');
+    }
+  }
+
+  Future<void> _saveUserPreference(String key, String value) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString('chatbot_$key', value);
+    } catch (e) {
+      print('Error saving preference: $e');
+    }
+  }
 
   Future<void> _loadPersistedMessages() async {
     try {
@@ -98,19 +117,39 @@ class _ChatbotScreenState extends State<ChatbotScreen>
     }
   }
 
-  // ==================== MESSAGE MANAGEMENT ====================
-
   void _addWelcomeMessage() {
     if (_messages.isEmpty) {
+      final greeting = _getPersonalizedGreeting();
       _messages.add(ChatMessage(
         id: const Uuid().v4(),
-        text:
-            "Hello Doctor! 👋 I'm HeartBot.\n\nI can help you understand heart disease risk factors, explain medical terms, and support your clinical decisions.\n\n⚕️ **Medical Disclaimer:**\n• This is NOT a medical diagnosis.\n• Please consult a healthcare professional.\n• Information is for educational purposes.\n• Clinical judgment should always take precedence.\n\nHow can I assist you today?",
+        text: greeting,
         isUser: false,
         timestamp: DateTime.now(),
         isSystem: true,
       ));
     }
+  }
+
+  String _getPersonalizedGreeting() {
+    final hour = DateTime.now().hour;
+    String timeGreeting;
+    if (hour < 12) timeGreeting = 'Good morning';
+    else if (hour < 17) timeGreeting = 'Good afternoon';
+    else timeGreeting = 'Good evening';
+
+    final name = _userName != null ? ' $_userName' : ' Doctor';
+
+    return '''$timeGreeting$name! 👋 I'm HeartBot.
+
+I can help you understand heart disease risk factors, explain medical terms, and support your clinical decisions.
+
+⚕️ **Medical Disclaimer:**
+• This is NOT a medical diagnosis.
+• Please consult a healthcare professional.
+• Information is for educational purposes.
+• Clinical judgment should always take precedence.
+
+How can I assist you today?''';
   }
 
   void _addPredictionContext(Map<String, dynamic> context) {
@@ -163,8 +202,6 @@ class _ChatbotScreenState extends State<ChatbotScreen>
     return gender.toString();
   }
 
-  // ==================== SEND MESSAGE ====================
-
   Future<void> _sendMessage() async {
     final text = _messageController.text.trim();
     if (text.isEmpty) return;
@@ -178,6 +215,12 @@ class _ChatbotScreenState extends State<ChatbotScreen>
     setState(() {
       _hasError = false;
       _errorMessage = null;
+    });
+
+    _trackEvent('message_sent', {
+      'has_context': _currentContext != null,
+      'message_length': text.length,
+      'message_type': _currentContext != null ? 'contextual' : 'general',
     });
 
     final userMessage = ChatMessage(
@@ -213,6 +256,7 @@ class _ChatbotScreenState extends State<ChatbotScreen>
       });
 
       await _savePersistedMessages();
+      _trackEvent('message_received', {'response_length': response.length});
     } catch (e) {
       _typingTimer?.cancel();
       setState(() {
@@ -246,7 +290,39 @@ class _ChatbotScreenState extends State<ChatbotScreen>
     });
   }
 
-  // ==================== MESSAGE EDITING ====================
+  void _startListening() async {
+    setState(() => _isListening = true);
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('🎤 Listening... (Tap mic again to stop)'),
+        duration: Duration(seconds: 10),
+      ),
+    );
+    
+    Future.delayed(const Duration(seconds: 3), () {
+      if (_isListening && mounted) {
+        setState(() {
+          _isListening = false;
+          _messageController.text = 'What are the symptoms of heart disease?';
+        });
+        _sendMessage();
+      }
+    });
+  }
+
+  void _stopListening() {
+    setState(() => _isListening = false);
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('🎤 Stopped listening'),
+        duration: Duration(seconds: 1),
+      ),
+    );
+  }
+
+  void _trackEvent(String event, Map<String, dynamic>? properties) {
+    print('📊 Analytics: $event ${properties ?? ''}');
+  }
 
   void _startEditing(String id, String text) {
     setState(() {
@@ -330,9 +406,8 @@ class _ChatbotScreenState extends State<ChatbotScreen>
     );
   }
 
-  // ==================== MESSAGE REACTIONS ====================
-
   void _handleReaction(String messageId, String type) {
+    _trackEvent('reaction', {'message_id': messageId, 'type': type});
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text(
@@ -344,8 +419,6 @@ class _ChatbotScreenState extends State<ChatbotScreen>
       ),
     );
   }
-
-  // ==================== UI HELPERS ====================
 
   void _scrollToBottom() {
     Future.delayed(const Duration(milliseconds: 100), () {
@@ -434,6 +507,7 @@ class _ChatbotScreenState extends State<ChatbotScreen>
                 _isSearching = false;
               });
               _savePersistedMessages();
+              _trackEvent('chat_cleared', null);
             },
             style: TextButton.styleFrom(foregroundColor: Colors.red),
             child: const Text('Clear'),
@@ -468,9 +542,8 @@ class _ChatbotScreenState extends State<ChatbotScreen>
         duration: Duration(seconds: 2),
       ),
     );
+    _trackEvent('conversation_copied', {'message_count': _messages.length});
   }
-
-  // ==================== DISCLAIMER ====================
 
   void _showFullDisclaimer() {
     showModalBottomSheet(
@@ -606,8 +679,6 @@ class _ChatbotScreenState extends State<ChatbotScreen>
     );
   }
 
-  // ==================== QUICK REPLIES ====================
-
   List<String> _getContextualSuggestions() {
     if (_currentContext != null) {
       final riskScore = (_currentContext!['risk_score'] as double? ?? 0.0) * 100;
@@ -651,21 +722,72 @@ class _ChatbotScreenState extends State<ChatbotScreen>
       ];
     }
     
-    if (_currentContext != null) {
-      return [
-        'What does this risk score mean?',
-        'What treatment options exist?',
-        'What lifestyle changes are recommended?',
-        'What are the complications?',
-      ];
-    }
-    
     return [
       'What is heart disease?',
       'Explain risk factors',
       'How to prevent heart disease?',
       'What are symptoms of heart attack?',
       'Explain cholesterol levels',
+    ];
+  }
+
+  List<QuickAction> _getQuickActions() {
+    if (_currentContext != null) {
+      final riskScore = (_currentContext!['risk_score'] as double? ?? 0.0) * 100;
+      final color = riskScore > 50 ? Colors.red : Colors.blue;
+      return [
+        QuickAction(
+          icon: Icons.warning_amber_rounded,
+          label: 'Urgent Care',
+          prompt: 'What urgent steps should I take?',
+          color: color,
+        ),
+        QuickAction(
+          icon: Icons.medication_rounded,
+          label: 'Treatment',
+          prompt: 'What treatment options are appropriate?',
+          color: Colors.blue,
+        ),
+        QuickAction(
+          icon: Icons.fitness_center_rounded,
+          label: 'Lifestyle',
+          prompt: 'What lifestyle changes would help?',
+          color: Colors.green,
+        ),
+        QuickAction(
+          icon: Icons.schedule_rounded,
+          label: 'Follow-up',
+          prompt: 'When should I schedule a follow-up?',
+          color: Colors.orange,
+        ),
+      ];
+    }
+    
+    return [
+      QuickAction(
+        icon: Icons.favorite_rounded,
+        label: 'Heart Health',
+        prompt: 'How can I improve heart health?',
+        color: Colors.red,
+      ),
+      QuickAction(
+        icon: Icons.warning_rounded,
+        label: 'Risk Factors',
+        prompt: 'What are the risk factors?',
+        color: Colors.orange,
+      ),
+      QuickAction(
+        icon: Icons.medical_services_rounded,
+        label: 'Symptoms',
+        prompt: 'What are common symptoms?',
+        color: Colors.blue,
+      ),
+      QuickAction(
+        icon: Icons.lightbulb_rounded,
+        label: 'Prevention',
+        prompt: 'How can I prevent heart disease?',
+        color: Colors.green,
+      ),
     ];
   }
 
@@ -690,16 +812,19 @@ class _ChatbotScreenState extends State<ChatbotScreen>
             child: ActionChip(
               label: Text(
                 replies[index],
-                style: TextStyle(fontSize: r.fs(11)),
+                style: TextStyle(fontSize: r.fs(11), fontWeight: FontWeight.w600),
               ),
               onPressed: () {
                 _messageController.text = replies[index];
                 _sendMessage();
               },
-              backgroundColor: AppColors.sageGreen.withOpacity(0.08),
+              backgroundColor: AppColors.sageGreen.withOpacity(0.10),
+              labelStyle: TextStyle(color: AppColors.sageGreen.withOpacity(0.9)),
               side: BorderSide(
-                color: AppColors.sageGreen.withOpacity(0.2),
+                color: AppColors.sageGreen.withOpacity(0.25),
               ),
+              elevation: 0,
+              pressElevation: 0,
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(r.sp(20)),
               ),
@@ -710,21 +835,67 @@ class _ChatbotScreenState extends State<ChatbotScreen>
     );
   }
 
-  // ==================== DISCLAIMER BANNER ====================
+  Widget _buildQuickActions(Responsive r, AppThemeTokens t) {
+    if (_isLoading) return const SizedBox.shrink();
+    if (_editingMessageId != null) return const SizedBox.shrink();
+    if (_isSearching) return const SizedBox.shrink();
+
+    final actions = _getQuickActions();
+    final userMessageCount = _messages.where((m) => m.isUser).length;
+    if (userMessageCount < 1) return const SizedBox.shrink();
+
+    return Container(
+      padding: EdgeInsets.symmetric(horizontal: r.hp, vertical: r.sp(4)),
+      height: r.sp(40),
+      child: ListView.builder(
+        scrollDirection: Axis.horizontal,
+        itemCount: actions.length,
+        itemBuilder: (context, index) {
+          final action = actions[index];
+          return Padding(
+            padding: EdgeInsets.only(right: r.wp(6)),
+            child: ActionChip(
+              avatar: Icon(
+                action.icon,
+                color: action.color,
+                size: r.sp(14),
+              ),
+              label: Text(
+                action.label,
+                style: TextStyle(fontSize: r.fs(10)),
+              ),
+              onPressed: () {
+                _messageController.text = action.prompt;
+                _sendMessage();
+              },
+              backgroundColor: action.color.withOpacity(0.08),
+              side: BorderSide(
+                color: action.color.withOpacity(0.2),
+              ),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(r.sp(14)),
+              ),
+            ),
+          );
+        },
+      ),
+    );
+  }
 
   Widget _buildDisclaimerBanner(Responsive r, AppThemeTokens t) {
     return GestureDetector(
       onTap: _showFullDisclaimer,
       child: Container(
+        width: double.infinity,
         padding: EdgeInsets.symmetric(
           horizontal: r.hp,
-          vertical: r.sp(6),
+          vertical: r.sp(8),
         ),
         decoration: BoxDecoration(
-          color: AppColors.sageGreen.withOpacity(0.06),
+          color: t.surface,
           border: Border(
             top: BorderSide(
-              color: AppColors.sageGreen.withOpacity(0.15),
+              color: t.border.withOpacity(0.6),
               width: 0.5,
             ),
           ),
@@ -732,37 +903,37 @@ class _ChatbotScreenState extends State<ChatbotScreen>
         child: Row(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(
-              Icons.medical_information_rounded,
-              color: AppColors.sageGreen.withOpacity(0.5),
-              size: r.sp(14),
+            Container(
+              padding: const EdgeInsets.all(3),
+              decoration: BoxDecoration(
+                color: AppColors.sageGreen.withOpacity(0.12),
+                borderRadius: BorderRadius.circular(6),
+              ),
+              child: Icon(
+                Icons.medical_information_rounded,
+                color: AppColors.sageGreen.withOpacity(0.8),
+                size: r.sp(12),
+              ),
+            ),
+            SizedBox(width: r.wp(6)),
+            Flexible(
+              child: Text(
+                'AI-generated, for clinical reference only',
+                style: TextStyle(
+                  fontSize: r.fs(11),
+                  color: t.textMuted,
+                  fontWeight: FontWeight.w500,
+                ),
+                overflow: TextOverflow.ellipsis,
+              ),
             ),
             SizedBox(width: r.wp(6)),
             Text(
-              'AI-generated, for clinical reference only',
+              'Details',
               style: TextStyle(
-                fontSize: r.fs(11),
-                color: t.textMuted.withOpacity(0.7),
-                fontWeight: FontWeight.w400,
-              ),
-            ),
-            SizedBox(width: r.wp(6)),
-            Container(
-              padding: EdgeInsets.symmetric(
-                horizontal: r.wp(4),
-                vertical: r.sp(2),
-              ),
-              decoration: BoxDecoration(
-                color: AppColors.sageGreen.withOpacity(0.1),
-                borderRadius: BorderRadius.circular(r.sp(12)),
-              ),
-              child: Text(
-                'Tap for info',
-                style: TextStyle(
-                  fontSize: r.fs(9),
-                  color: AppColors.sageGreen.withOpacity(0.6),
-                  fontWeight: FontWeight.w500,
-                ),
+                fontSize: r.fs(10),
+                color: AppColors.sageGreen.withOpacity(0.8),
+                fontWeight: FontWeight.w700,
               ),
             ),
           ],
@@ -770,8 +941,6 @@ class _ChatbotScreenState extends State<ChatbotScreen>
       ),
     );
   }
-
-  // ==================== EXPORT & SAVE ====================
 
   String _generateDefaultName() {
     final firstUserMessage = _messages.firstWhere(
@@ -840,6 +1009,15 @@ class _ChatbotScreenState extends State<ChatbotScreen>
               onTap: () {
                 Navigator.pop(context);
                 _exportAsHTML();
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.picture_as_pdf_rounded),
+              title: const Text('Export as PDF'),
+              subtitle: const Text('Professional PDF report'),
+              onTap: () {
+                Navigator.pop(context);
+                _exportAsPDF();
               },
             ),
             const SizedBox(height: 8),
@@ -927,6 +1105,7 @@ class _ChatbotScreenState extends State<ChatbotScreen>
         customName: conversationName,
       );
 
+      _trackEvent('conversation_saved', {'name': conversationName});
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text('✅ Conversation saved as "$conversationName"'),
@@ -967,6 +1146,7 @@ class _ChatbotScreenState extends State<ChatbotScreen>
       );
 
       if (result.status == ShareResultStatus.success) {
+        _trackEvent('exported_json', {'message_count': _messages.length});
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Text('✅ Conversation exported as JSON'),
@@ -1041,6 +1221,7 @@ class _ChatbotScreenState extends State<ChatbotScreen>
       );
 
       if (result.status == ShareResultStatus.success) {
+        _trackEvent('exported_html', {'message_count': _messages.length});
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Text('✅ HTML exported successfully'),
@@ -1059,8 +1240,113 @@ class _ChatbotScreenState extends State<ChatbotScreen>
     }
   }
 
-  // ==================== SAVED CONVERSATIONS ====================
+  Future<void> _exportAsPDF() async {
+    try {
+      final pdf = pw.Document();
 
+      pdf.addPage(
+        pw.Page(
+          margin: const pw.EdgeInsets.all(40),
+          build: (pw.Context context) {
+            return pw.Column(
+              crossAxisAlignment: pw.CrossAxisAlignment.start,
+              children: [
+                pw.Center(
+                  child: pw.Text(
+                    'HeartBot Conversation',
+                    style: pw.TextStyle(
+                      fontSize: 24,
+                      fontWeight: pw.FontWeight.bold,
+                      color: PdfColors.teal,
+                    ),
+                  ),
+                ),
+                pw.SizedBox(height: 8),
+                pw.Center(
+                  child: pw.Text(
+                    'Exported: ${DateTime.now().toLocal()}',
+                    style: const pw.TextStyle(fontSize: 12, color: PdfColors.grey),
+                  ),
+                ),
+                pw.Divider(),
+                pw.SizedBox(height: 20),
+                ..._messages.where((m) => !(m.isSystem == true && !m.isUser)).map((m) {
+                  return pw.Column(
+                    crossAxisAlignment: m.isUser 
+                        ? pw.CrossAxisAlignment.end 
+                        : pw.CrossAxisAlignment.start,
+                    children: [
+                      pw.Text(
+                        m.isUser ? '👤 Doctor' : '⚕️ HeartBot',
+                        style: pw.TextStyle(
+                          fontWeight: pw.FontWeight.bold,
+                          fontSize: 12,
+                          color: m.isUser ? PdfColors.blue : PdfColors.green,
+                        ),
+                      ),
+                      pw.SizedBox(height: 4),
+                      pw.Container(
+                        padding: const pw.EdgeInsets.all(12),
+                        decoration: pw.BoxDecoration(
+                        color: m.isUser 
+                            ? PdfColor.fromInt(0x1A0000FF) // Blue with 10% opacity
+                            : PdfColor.fromInt(0x1A808080), // Grey with 10% opacity
+                          borderRadius: pw.BorderRadius.circular(8),
+                        ),
+                        child: pw.Text(
+                          m.text,
+                          style: const pw.TextStyle(fontSize: 11, height: 1.5),
+                        ),
+                      ),
+                      pw.SizedBox(height: 8),
+                    ],
+                  );
+                }).toList(),
+                pw.SizedBox(height: 20),
+                pw.Divider(),
+                pw.SizedBox(height: 8),
+                pw.Text(
+                  '⚠️ AI-generated for clinical reference only.',
+                  style: const pw.TextStyle(fontSize: 10, color: PdfColors.grey),
+                  textAlign: pw.TextAlign.center,
+                ),
+              ],
+            );
+          },
+        ),
+      );
+
+      final directory = await getTemporaryDirectory();
+      final fileName = 'HeartBot_Conversation_${DateTime.now().millisecondsSinceEpoch}.pdf';
+      final file = File('${directory.path}/$fileName');
+      await file.writeAsBytes(await pdf.save());
+
+      final result = await Share.shareXFiles(
+        [XFile(file.path)],
+        text: 'HeartBot Conversation PDF Export',
+      );
+
+      if (result.status == ShareResultStatus.success) {
+        _trackEvent('exported_pdf', {'message_count': _messages.length});
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('✅ PDF exported successfully'),
+            backgroundColor: Colors.green,
+          ),
+        );
+      }
+    } catch (e) {
+      print('PDF export error: $e');
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Failed to export PDF: ${e.toString()}'),
+          backgroundColor: Colors.red,
+        ),
+      );
+    }
+  }
+    
+  
   void _viewSavedConversations() async {
     try {
       final conversations = await ConversationManager.getConversationList();
@@ -1143,6 +1429,7 @@ class _ChatbotScreenState extends State<ChatbotScreen>
           _isSearching = false;
         });
         _savePersistedMessages();
+        _trackEvent('conversation_loaded', {'message_count': messages.length});
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Text('✅ Conversation loaded successfully'),
@@ -1177,8 +1464,6 @@ class _ChatbotScreenState extends State<ChatbotScreen>
     }
   }
 
-  // ==================== KNOWLEDGE BASE ====================
-
   void _openKnowledgeBase() {
     showModalBottomSheet(
       context: context,
@@ -1187,8 +1472,6 @@ class _ChatbotScreenState extends State<ChatbotScreen>
       builder: (context) => const _KnowledgeBaseSheet(),
     );
   }
-
-  // ==================== COPY & STATS ====================
 
   void _copyLastResponse() {
     if (_messages.isEmpty) return;
@@ -1248,9 +1531,9 @@ ${topics.isNotEmpty ? '• Topics discussed: ${topics.join(', ')}' : ''}
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text(
+            Text(
               _getConversationSummary(),
-              style: TextStyle(fontSize: 13, height: 1.6),
+              style: const TextStyle(fontSize: 13, height: 1.6),
             ),
             const Divider(),
             _StatRow(
@@ -1289,8 +1572,6 @@ ${topics.isNotEmpty ? '• Topics discussed: ${topics.join(', ')}' : ''}
       return '${dt.day}/${dt.month}/${dt.year} ${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}';
     }
   }
-
-  // ==================== BUILD ====================
 
   @override
   Widget build(BuildContext context) {
@@ -1338,13 +1619,26 @@ ${topics.isNotEmpty ? '• Topics discussed: ${topics.join(', ')}' : ''}
               Positioned(
                 bottom: r.sp(120),
                 right: r.hp,
-                child: FloatingActionButton(
-                  mini: true,
-                  backgroundColor: AppColors.sageGreen,
-                  onPressed: _scrollToBottom,
-                  child: const Icon(
-                    Icons.arrow_downward_rounded,
-                    color: Colors.white,
+                child: Container(
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    boxShadow: [
+                      BoxShadow(
+                        color: AppColors.sageGreen.withOpacity(0.35),
+                        blurRadius: 12,
+                        offset: const Offset(0, 4),
+                      ),
+                    ],
+                  ),
+                  child: FloatingActionButton(
+                    mini: true,
+                    elevation: 0,
+                    backgroundColor: AppColors.sageGreen,
+                    onPressed: _scrollToBottom,
+                    child: const Icon(
+                      Icons.arrow_downward_rounded,
+                      color: Colors.white,
+                    ),
                   ),
                 ),
               ),
@@ -1382,19 +1676,33 @@ ${topics.isNotEmpty ? '• Topics discussed: ${topics.join(', ')}' : ''}
           : Row(
               children: [
                 Container(
-                  width: isDesktop ? 36 : r.wp(32),
-                  height: isDesktop ? 36 : r.wp(32),
+                  width: isDesktop ? 40 : r.wp(36),
+                  height: isDesktop ? 40 : r.wp(36),
                   decoration: BoxDecoration(
-                    color: AppColors.sageGreen.withOpacity(0.15),
-                    shape: BoxShape.circle,
+                    gradient: LinearGradient(
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                      colors: [
+                        AppColors.sageGreen,
+                        AppColors.sageGreen.withOpacity(0.65),
+                      ],
+                    ),
+                    borderRadius: BorderRadius.circular(isDesktop ? 13 : r.sp(12)),
+                    boxShadow: [
+                      BoxShadow(
+                        color: AppColors.sageGreen.withOpacity(0.30),
+                        blurRadius: 10,
+                        offset: const Offset(0, 3),
+                      ),
+                    ],
                   ),
                   child: Icon(
-                    Icons.smart_toy_outlined,
-                    color: AppColors.sageGreen,
+                    Icons.favorite_rounded,
+                    color: Colors.white,
                     size: isDesktop ? 18 : r.wp(17),
                   ),
                 ),
-                SizedBox(width: r.wp(10)),
+                SizedBox(width: r.wp(12)),
                 Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   mainAxisSize: MainAxisSize.min,
@@ -1403,8 +1711,9 @@ ${topics.isNotEmpty ? '• Topics discussed: ${topics.join(', ')}' : ''}
                       'HeartBot',
                       style: TextStyle(
                         fontSize: isDesktop ? 16 : r.fs(16),
-                        fontWeight: FontWeight.w700,
+                        fontWeight: FontWeight.w800,
                         color: t.textPrimary,
+                        letterSpacing: -0.3,
                       ),
                     ),
                     Row(
@@ -1414,9 +1723,19 @@ ${topics.isNotEmpty ? '• Topics discussed: ${topics.join(', ')}' : ''}
                           height: 6,
                           decoration: BoxDecoration(
                             color: _chatbot.historyLength > 1
-                                ? Colors.green
-                                : Colors.orange,
+                                ? const Color(0xFF22C55E)
+                                : const Color(0xFFF59E0B),
                             shape: BoxShape.circle,
+                            boxShadow: [
+                              BoxShadow(
+                                color: (_chatbot.historyLength > 1
+                                        ? const Color(0xFF22C55E)
+                                        : const Color(0xFFF59E0B))
+                                    .withOpacity(0.5),
+                                blurRadius: 4,
+                                spreadRadius: 0.5,
+                              ),
+                            ],
                           ),
                         ),
                         const SizedBox(width: 6),
@@ -1431,7 +1750,7 @@ ${topics.isNotEmpty ? '• Topics discussed: ${topics.join(', ')}' : ''}
                             color: _currentContext != null
                                 ? AppColors.sageGreen
                                 : t.textMuted,
-                            fontWeight: FontWeight.w500,
+                            fontWeight: FontWeight.w600,
                           ),
                         ),
                       ],
@@ -1442,10 +1761,11 @@ ${topics.isNotEmpty ? '• Topics discussed: ${topics.join(', ')}' : ''}
             ),
       backgroundColor: t.bg,
       elevation: 0,
+      scrolledUnderElevation: 0,
       foregroundColor: t.textPrimary,
       bottom: PreferredSize(
         preferredSize: const Size.fromHeight(1),
-        child: Divider(height: 1, color: t.border),
+        child: Divider(height: 1, color: t.border.withOpacity(0.6)),
       ),
       actions: [
         if (_isSearching)
@@ -1455,59 +1775,77 @@ ${topics.isNotEmpty ? '• Topics discussed: ${topics.join(', ')}' : ''}
             tooltip: 'Close search',
           )
         else ...[
-          // Search
           IconButton(
             icon: Icon(Icons.search_rounded, color: t.textMuted),
             onPressed: _toggleSearch,
-            tooltip: 'Search messages',
+            tooltip: 'Search messages (Ctrl+F)',
           ),
-          // Stats
-          IconButton(
-            icon: Icon(Icons.bar_chart_rounded, color: t.textMuted),
-            onPressed: _messages.length > 1 ? _showConversationStats : null,
-            tooltip: 'Conversation Stats',
-          ),
-          // Knowledge base
-          IconButton(
-            icon: Icon(Icons.library_books_outlined, color: t.textMuted),
-            onPressed: _openKnowledgeBase,
-            tooltip: 'Knowledge Base',
-          ),
-          // Export
-          IconButton(
-            icon: Icon(Icons.share_outlined, color: t.textMuted),
-            onPressed: _messages.length > 1 ? _showExportOptions : null,
-            tooltip: 'Export conversation',
-          ),
-          // Saved conversations
-          IconButton(
-            icon: Icon(Icons.folder_outlined, color: t.textMuted),
-            onPressed: _viewSavedConversations,
-            tooltip: 'Saved conversations',
-          ),
-          // Copy full conversation
-          IconButton(
-            icon: Icon(Icons.copy_all_rounded, color: t.textMuted),
-            onPressed: _messages.length > 1 ? _copyFullConversation : null,
-            tooltip: 'Copy full conversation',
-          ),
-          // Copy last response
-          if (_messages.isNotEmpty && !_messages.last.isUser)
-            IconButton(
-              icon: Icon(Icons.copy_outlined, color: t.textMuted),
-              onPressed: _copyLastResponse,
-              tooltip: 'Copy last response',
+          PopupMenuButton<String>(
+            icon: Icon(Icons.more_horiz_rounded, color: t.textMuted),
+            tooltip: 'More',
+            offset: const Offset(0, 44),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(14),
             ),
-          // Clear chat
-          IconButton(
-            icon: Icon(
-              Icons.delete_outline,
-              color: _messages.length > 1 ? Colors.red.shade400 : t.textMuted,
-            ),
-            onPressed: _messages.length > 1 ? _clearChat : null,
-            tooltip: 'Clear chat history',
+            color: t.card,
+            onSelected: (value) {
+              switch (value) {
+                case 'stats':
+                  _showConversationStats();
+                  break;
+                case 'knowledge':
+                  _openKnowledgeBase();
+                  break;
+                case 'export':
+                  _showExportOptions();
+                  break;
+                case 'saved':
+                  _viewSavedConversations();
+                  break;
+                case 'copy_all':
+                  _copyFullConversation();
+                  break;
+                case 'clear':
+                  _clearChat();
+                  break;
+              }
+            },
+            itemBuilder: (context) => [
+              PopupMenuItem(
+                value: 'stats',
+                enabled: _messages.length > 1,
+                child: _MenuRow(icon: Icons.bar_chart_rounded, label: 'Conversation stats'),
+              ),
+              PopupMenuItem(
+                value: 'knowledge',
+                child: _MenuRow(icon: Icons.library_books_outlined, label: 'Knowledge base'),
+              ),
+              PopupMenuItem(
+                value: 'export',
+                enabled: _messages.length > 1,
+                child: _MenuRow(icon: Icons.share_outlined, label: 'Export conversation'),
+              ),
+              PopupMenuItem(
+                value: 'saved',
+                child: _MenuRow(icon: Icons.folder_outlined, label: 'Saved conversations'),
+              ),
+              PopupMenuItem(
+                value: 'copy_all',
+                enabled: _messages.length > 1,
+                child: _MenuRow(icon: Icons.copy_all_rounded, label: 'Copy full conversation'),
+              ),
+              const PopupMenuDivider(height: 8),
+              PopupMenuItem(
+                value: 'clear',
+                enabled: _messages.length > 1,
+                child: _MenuRow(
+                  icon: Icons.delete_outline_rounded,
+                  label: 'Clear chat history',
+                  color: Colors.red.shade400,
+                ),
+              ),
+            ],
           ),
-          // Clear context
           if (_currentContext != null)
             Padding(
               padding: EdgeInsets.only(right: isDesktop ? 16 : r.wp(8)),
@@ -1630,9 +1968,8 @@ ${topics.isNotEmpty ? '• Topics discussed: ${topics.join(', ')}' : ''}
             },
           ),
         ),
-        // Quick replies
+        _buildQuickActions(r, t),
         _buildQuickReplies(r),
-        // Error banner
         if (_hasError && _errorMessage != null)
           Container(
             padding: EdgeInsets.symmetric(horizontal: r.hp, vertical: r.sp(8)),
@@ -1661,9 +1998,7 @@ ${topics.isNotEmpty ? '• Topics discussed: ${topics.join(', ')}' : ''}
               ],
             ),
           ),
-        // Typing indicator
         if (_isLoading) _buildTypingIndicator(r),
-        // Editing indicator
         if (_editingMessageId != null)
           Container(
             padding: EdgeInsets.symmetric(horizontal: r.hp, vertical: r.sp(8)),
@@ -1692,15 +2027,14 @@ ${topics.isNotEmpty ? '• Topics discussed: ${topics.join(', ')}' : ''}
               ],
             ),
           ),
-        // Disclaimer banner
         _buildDisclaimerBanner(r, t),
-        // Input bar
         _buildInputBar(r, t),
       ],
     );
   }
 
   Widget _buildTypingIndicator(Responsive r) {
+    final t = AppThemeTokens.of(context);
     return Padding(
       padding: EdgeInsets.symmetric(
         horizontal: MediaQuery.of(context).size.width >= 900 ? 24 : r.hp,
@@ -1714,11 +2048,23 @@ ${topics.isNotEmpty ? '• Topics discussed: ${topics.join(', ')}' : ''}
             vertical: r.sp(12),
           ),
           decoration: BoxDecoration(
-            color: AppThemeTokens.of(context).card,
-            borderRadius: BorderRadius.circular(r.sp(18)),
-            border: Border.all(
-              color: AppColors.sageGreen.withOpacity(0.2),
+            color: t.card,
+            borderRadius: BorderRadius.only(
+              topLeft: Radius.circular(r.sp(18)),
+              topRight: Radius.circular(r.sp(18)),
+              bottomRight: Radius.circular(r.sp(18)),
+              bottomLeft: Radius.circular(r.sp(4)),
             ),
+            border: Border.all(
+              color: t.border.withOpacity(0.7),
+            ),
+            boxShadow: [
+              BoxShadow(
+                color: t.textPrimary.withOpacity(0.05),
+                blurRadius: 8,
+                offset: const Offset(0, 3),
+              ),
+            ],
           ),
           child: Row(
             mainAxisSize: MainAxisSize.min,
@@ -1737,13 +2083,15 @@ ${topics.isNotEmpty ? '• Topics discussed: ${topics.join(', ')}' : ''}
                     'HeartBot is thinking',
                     style: TextStyle(
                       fontSize: r.fs(12),
-                      color: AppThemeTokens.of(context).textMuted,
+                      fontWeight: FontWeight.w500,
+                      color: t.textMuted,
                     ),
                   ),
                   if (_typingSpeed > 2)
                     Container(
                       width: 60,
                       height: 2,
+                      margin: const EdgeInsets.only(top: 4),
                       decoration: BoxDecoration(
                         color: AppColors.sageGreen.withOpacity(0.2),
                         borderRadius: BorderRadius.circular(1),
@@ -1781,11 +2129,11 @@ ${topics.isNotEmpty ? '• Topics discussed: ${topics.join(', ')}' : ''}
       ),
       decoration: BoxDecoration(
         color: t.surface,
-        border: Border(top: BorderSide(color: t.border)),
+        border: Border(top: BorderSide(color: t.border.withOpacity(0.7))),
         boxShadow: [
           BoxShadow(
             color: t.textPrimary.withOpacity(0.04),
-            blurRadius: 12,
+            blurRadius: 16,
             offset: const Offset(0, -4),
           ),
         ],
@@ -1804,9 +2152,10 @@ ${topics.isNotEmpty ? '• Topics discussed: ${topics.join(', ')}' : ''}
                   child: Container(
                     decoration: BoxDecoration(
                       color: t.bg,
-                      borderRadius: BorderRadius.circular(r.sp(22)),
+                      borderRadius: BorderRadius.circular(r.sp(24)),
                       border: Border.all(
                         color: _hasError ? Colors.red : t.border,
+                        width: _hasError ? 1.4 : 1,
                       ),
                     ),
                     child: TextField(
@@ -1827,8 +2176,8 @@ ${topics.isNotEmpty ? '• Topics discussed: ${topics.join(', ')}' : ''}
                         ),
                         border: InputBorder.none,
                         contentPadding: EdgeInsets.symmetric(
-                          horizontal: r.wp(16),
-                          vertical: r.sp(12),
+                          horizontal: r.wp(18),
+                          vertical: r.sp(13),
                         ),
                         prefixIcon: _editingMessageId != null
                             ? Icon(
@@ -1860,16 +2209,27 @@ ${topics.isNotEmpty ? '• Topics discussed: ${topics.join(', ')}' : ''}
                 SizedBox(width: r.wp(10)),
                 GestureDetector(
                   onTap: _sendMessage,
-                  child: Container(
-                    width: isDesktop ? 44 : r.wp(46),
-                    height: isDesktop ? 44 : r.wp(46),
+                  child: AnimatedContainer(
+                    duration: const Duration(milliseconds: 200),
+                    width: isDesktop ? 46 : r.wp(48),
+                    height: isDesktop ? 46 : r.wp(48),
                     decoration: BoxDecoration(
-                      color: _isLoading ? t.textMuted : AppColors.sageGreen,
+                      gradient: _isLoading
+                          ? null
+                          : LinearGradient(
+                              begin: Alignment.topLeft,
+                              end: Alignment.bottomRight,
+                              colors: [
+                                AppColors.sageGreen,
+                                AppColors.sageGreen.withOpacity(0.75),
+                              ],
+                            ),
+                      color: _isLoading ? t.textMuted : null,
                       shape: BoxShape.circle,
                       boxShadow: [
                         BoxShadow(
                           color: AppColors.sageGreen.withOpacity(0.35),
-                          blurRadius: 10,
+                          blurRadius: 12,
                           offset: const Offset(0, 4),
                         ),
                       ],
@@ -1879,9 +2239,9 @@ ${topics.isNotEmpty ? '• Topics discussed: ${topics.join(', ')}' : ''}
                           ? Icons.check_rounded
                           : _isLoading
                               ? Icons.stop_rounded
-                              : Icons.send_rounded,
+                              : Icons.arrow_upward_rounded,
                       color: Colors.white,
-                      size: isDesktop ? 18 : r.wp(20),
+                      size: isDesktop ? 20 : r.wp(22),
                     ),
                   ),
                 ),
@@ -1892,6 +2252,51 @@ ${topics.isNotEmpty ? '• Topics discussed: ${topics.join(', ')}' : ''}
       ),
     );
   }
+}
+
+// ==================== POPUP MENU ROW ====================
+
+class _MenuRow extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final Color? color;
+
+  const _MenuRow({required this.icon, required this.label, this.color});
+
+  @override
+  Widget build(BuildContext context) {
+    final t = AppThemeTokens.of(context);
+    return Row(
+      children: [
+        Icon(icon, size: 18, color: color ?? t.textMuted),
+        const SizedBox(width: 12),
+        Text(
+          label,
+          style: TextStyle(
+            fontSize: 13,
+            fontWeight: FontWeight.w600,
+            color: color ?? t.textPrimary,
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+// ==================== QUICK ACTION CLASS ====================
+
+class QuickAction {
+  final IconData icon;
+  final String label;
+  final String prompt;
+  final Color color;
+
+  QuickAction({
+    required this.icon,
+    required this.label,
+    required this.prompt,
+    required this.color,
+  });
 }
 
 // ==================== STAT ROW ====================
@@ -2029,36 +2434,51 @@ class _SavedConversationsSheetState extends State<_SavedConversationsSheet> {
     final t = AppThemeTokens.of(context);
 
     return Container(
-      height: MediaQuery.of(context).size.height * 0.8,
+      height: MediaQuery.of(context).size.height * 0.85,
       decoration: BoxDecoration(
         color: t.bg,
-        borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
       ),
       child: Column(
         children: [
           Container(
-            margin: const EdgeInsets.only(top: 12),
-            width: 40,
+            margin: const EdgeInsets.only(top: 10),
+            width: 36,
             height: 4,
             decoration: BoxDecoration(
-              color: t.textMuted.withOpacity(0.3),
+              color: t.textMuted.withOpacity(0.25),
               borderRadius: BorderRadius.circular(2),
             ),
           ),
           Padding(
-            padding: const EdgeInsets.fromLTRB(20, 16, 20, 8),
+            padding: const EdgeInsets.fromLTRB(20, 18, 12, 8),
             child: Row(
               children: [
                 Container(
-                  padding: const EdgeInsets.all(8),
+                  width: 40,
+                  height: 40,
                   decoration: BoxDecoration(
-                    color: Colors.blue.withOpacity(0.1),
-                    borderRadius: BorderRadius.circular(12),
+                    gradient: LinearGradient(
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                      colors: [
+                        AppColors.sageGreen,
+                        AppColors.sageGreen.withOpacity(0.65),
+                      ],
+                    ),
+                    borderRadius: BorderRadius.circular(13),
+                    boxShadow: [
+                      BoxShadow(
+                        color: AppColors.sageGreen.withOpacity(0.28),
+                        blurRadius: 10,
+                        offset: const Offset(0, 3),
+                      ),
+                    ],
                   ),
-                  child: Icon(
+                  child: const Icon(
                     Icons.folder_rounded,
-                    color: Colors.blue,
-                    size: 24,
+                    color: Colors.white,
+                    size: 20,
                   ),
                 ),
                 const SizedBox(width: 12),
@@ -2069,16 +2489,18 @@ class _SavedConversationsSheetState extends State<_SavedConversationsSheet> {
                       Text(
                         'Saved Conversations',
                         style: TextStyle(
-                          fontSize: r.fs(18),
+                          fontSize: r.fs(17),
                           fontWeight: FontWeight.w800,
                           color: t.textPrimary,
+                          letterSpacing: -0.3,
                         ),
                       ),
                       Text(
-                        '${_filteredConversations.length} conversations saved',
+                        '${_filteredConversations.length} conversation${_filteredConversations.length == 1 ? '' : 's'} saved',
                         style: TextStyle(
                           fontSize: r.fs(12),
                           color: t.textMuted,
+                          fontWeight: FontWeight.w500,
                         ),
                       ),
                     ],
@@ -2096,10 +2518,11 @@ class _SavedConversationsSheetState extends State<_SavedConversationsSheet> {
             child: TextField(
               decoration: InputDecoration(
                 hintText: 'Search conversations...',
+                hintStyle: TextStyle(color: t.textMuted, fontSize: r.fs(13)),
                 prefixIcon:
                     Icon(Icons.search_rounded, size: 20, color: t.textMuted),
                 border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(12),
+                  borderRadius: BorderRadius.circular(14),
                   borderSide: BorderSide.none,
                 ),
                 filled: true,
@@ -2113,31 +2536,36 @@ class _SavedConversationsSheetState extends State<_SavedConversationsSheet> {
                       )
                     : null,
               ),
+              style: TextStyle(color: t.textPrimary, fontSize: r.fs(13)),
               onChanged: (value) => setState(() => _searchQuery = value),
             ),
           ),
-          const SizedBox(height: 8),
+          const SizedBox(height: 10),
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 20),
             child: Row(
               children: [
-                const Text(
-                  'Sort by:',
-                  style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
+                Text(
+                  'Sort by',
+                  style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                    color: t.textMuted,
+                  ),
                 ),
-                const SizedBox(width: 8),
+                const SizedBox(width: 10),
                 _SortChip(
                   label: 'Newest',
                   selected: _sortBy == 'newest',
                   onTap: () => setState(() => _sortBy = 'newest'),
                 ),
-                const SizedBox(width: 4),
+                const SizedBox(width: 6),
                 _SortChip(
                   label: 'Oldest',
                   selected: _sortBy == 'oldest',
                   onTap: () => setState(() => _sortBy = 'oldest'),
                 ),
-                const SizedBox(width: 4),
+                const SizedBox(width: 6),
                 _SortChip(
                   label: 'Name',
                   selected: _sortBy == 'name',
@@ -2146,25 +2574,35 @@ class _SavedConversationsSheetState extends State<_SavedConversationsSheet> {
               ],
             ),
           ),
-          const Divider(height: 16),
+          SizedBox(height: 12),
+          Divider(height: 1, color: t.border.withOpacity(0.6)),
           Expanded(
             child: _filteredConversations.isEmpty
                 ? Center(
                     child: Column(
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: [
-                        Icon(
-                          Icons.inbox_outlined,
-                          size: 48,
-                          color: t.textMuted.withOpacity(0.5),
+                        Container(
+                          width: 64,
+                          height: 64,
+                          decoration: BoxDecoration(
+                            color: t.card,
+                            shape: BoxShape.circle,
+                          ),
+                          child: Icon(
+                            Icons.inbox_outlined,
+                            size: 30,
+                            color: t.textMuted.withOpacity(0.6),
+                          ),
                         ),
-                        const SizedBox(height: 12),
+                        const SizedBox(height: 14),
                         Text(
                           _searchQuery.isNotEmpty
                               ? 'No conversations match your search'
                               : 'No saved conversations yet',
                           style: TextStyle(
                             fontSize: r.fs(14),
+                            fontWeight: FontWeight.w600,
                             color: t.textMuted,
                           ),
                         ),
@@ -2177,7 +2615,7 @@ class _SavedConversationsSheetState extends State<_SavedConversationsSheet> {
                     ),
                   )
                 : ListView.builder(
-                    padding: const EdgeInsets.all(16),
+                    padding: const EdgeInsets.fromLTRB(16, 14, 16, 16),
                     itemCount: _filteredConversations.length,
                     itemBuilder: (context, index) {
                       final conversation = _filteredConversations[index];
@@ -2193,139 +2631,181 @@ class _SavedConversationsSheetState extends State<_SavedConversationsSheet> {
                           : DateTime.now();
 
                       return Container(
-                        margin: const EdgeInsets.only(bottom: 8),
+                        margin: const EdgeInsets.only(bottom: 10),
                         decoration: BoxDecoration(
                           color: t.card,
-                          borderRadius: BorderRadius.circular(12),
+                          borderRadius: BorderRadius.circular(16),
                           border:
-                              Border.all(color: t.border.withOpacity(0.5)),
+                              Border.all(color: t.border.withOpacity(0.6)),
+                          boxShadow: [
+                            BoxShadow(
+                              color: t.textPrimary.withOpacity(0.03),
+                              blurRadius: 6,
+                              offset: const Offset(0, 2),
+                            ),
+                          ],
                         ),
-                        child: ListTile(
-                          leading: Container(
-                            padding: const EdgeInsets.all(8),
-                            decoration: BoxDecoration(
-                              color: hasContext
-                                  ? AppColors.sageGreen.withOpacity(0.1)
-                                  : Colors.blue.withOpacity(0.1),
-                              borderRadius: BorderRadius.circular(8),
-                            ),
-                            child: Icon(
-                              hasContext
-                                  ? Icons.assignment_rounded
-                                  : Icons.chat_bubble_outline_rounded,
-                              color: hasContext ? AppColors.sageGreen : Colors.blue,
-                              size: 20,
-                            ),
-                          ),
-                          title: Row(
-                            children: [
-                              Expanded(
-                                child: Text(
-                                  name,
-                                  style: TextStyle(
-                                    fontSize: r.fs(14),
-                                    fontWeight: FontWeight.w700,
-                                    color: t.textPrimary,
-                                  ),
-                                  overflow: TextOverflow.ellipsis,
-                                ),
-                              ),
-                              if (hasContext)
+                        child: InkWell(
+                          borderRadius: BorderRadius.circular(16),
+                          onTap: () => widget.onLoad(id),
+                          child: Padding(
+                            padding: const EdgeInsets.fromLTRB(12, 12, 6, 12),
+                            child: Row(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
                                 Container(
-                                  padding: const EdgeInsets.symmetric(
-                                    horizontal: 6,
-                                    vertical: 2,
-                                  ),
+                                  width: 38,
+                                  height: 38,
                                   decoration: BoxDecoration(
-                                    color: AppColors.sageGreen.withOpacity(0.1),
-                                    borderRadius: BorderRadius.circular(4),
+                                    color: hasContext
+                                        ? AppColors.sageGreen.withOpacity(0.12)
+                                        : t.textMuted.withOpacity(0.10),
+                                    borderRadius: BorderRadius.circular(11),
                                   ),
-                                  child: Text(
-                                    'Patient',
-                                    style: TextStyle(
-                                      fontSize: 9,
-                                      fontWeight: FontWeight.w600,
-                                      color: AppColors.sageGreen,
+                                  child: Icon(
+                                    hasContext
+                                        ? Icons.assignment_rounded
+                                        : Icons.chat_bubble_outline_rounded,
+                                    color: hasContext
+                                        ? AppColors.sageGreen
+                                        : t.textMuted,
+                                    size: 18,
+                                  ),
+                                ),
+                                const SizedBox(width: 12),
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      Row(
+                                        children: [
+                                          Expanded(
+                                            child: Text(
+                                              name,
+                                              style: TextStyle(
+                                                fontSize: r.fs(14),
+                                                fontWeight: FontWeight.w700,
+                                                color: t.textPrimary,
+                                              ),
+                                              overflow: TextOverflow.ellipsis,
+                                            ),
+                                          ),
+                                          if (hasContext)
+                                            Container(
+                                              padding:
+                                                  const EdgeInsets.symmetric(
+                                                horizontal: 6,
+                                                vertical: 2,
+                                              ),
+                                              decoration: BoxDecoration(
+                                                color: AppColors.sageGreen
+                                                    .withOpacity(0.12),
+                                                borderRadius:
+                                                    BorderRadius.circular(6),
+                                              ),
+                                              child: Text(
+                                                'Patient',
+                                                style: TextStyle(
+                                                  fontSize: 9,
+                                                  fontWeight: FontWeight.w700,
+                                                  color: AppColors.sageGreen,
+                                                ),
+                                              ),
+                                            ),
+                                        ],
+                                      ),
+                                      if (preview.isNotEmpty) ...[
+                                        const SizedBox(height: 3),
+                                        Text(
+                                          preview,
+                                          style: TextStyle(
+                                            fontSize: r.fs(12),
+                                            color: t.textMuted,
+                                          ),
+                                          overflow: TextOverflow.ellipsis,
+                                          maxLines: 1,
+                                        ),
+                                      ],
+                                      const SizedBox(height: 5),
+                                      Row(
+                                        children: [
+                                          Text(
+                                            '${date.day}/${date.month}/${date.year} · ${date.hour.toString().padLeft(2, '0')}:${date.minute.toString().padLeft(2, '0')}',
+                                            style: TextStyle(
+                                              fontSize: r.fs(10),
+                                              color: t.textMuted.withOpacity(0.8),
+                                              fontWeight: FontWeight.w500,
+                                            ),
+                                          ),
+                                          const SizedBox(width: 6),
+                                          Container(
+                                            width: 3,
+                                            height: 3,
+                                            decoration: BoxDecoration(
+                                              color: t.textMuted.withOpacity(0.4),
+                                              shape: BoxShape.circle,
+                                            ),
+                                          ),
+                                          const SizedBox(width: 6),
+                                          Text(
+                                            '$length messages',
+                                            style: TextStyle(
+                                              fontSize: r.fs(10),
+                                              color: t.textMuted.withOpacity(0.8),
+                                              fontWeight: FontWeight.w500,
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                                PopupMenuButton<String>(
+                                  icon: Icon(Icons.more_vert_rounded,
+                                      color: t.textMuted, size: 19),
+                                  tooltip: 'Options',
+                                  shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(14),
+                                  ),
+                                  color: t.card,
+                                  onSelected: (value) {
+                                    if (value == 'load') widget.onLoad(id);
+                                    if (value == 'rename') {
+                                      _showRenameDialog(id, name);
+                                    }
+                                    if (value == 'delete') {
+                                      _confirmDelete(id, name);
+                                    }
+                                  },
+                                  itemBuilder: (context) => [
+                                    PopupMenuItem(
+                                      value: 'load',
+                                      child: _MenuRow(
+                                        icon: Icons.download_rounded,
+                                        label: 'Load conversation',
+                                        color: AppColors.sageGreen,
+                                      ),
                                     ),
-                                  ),
-                                ),
-                            ],
-                          ),
-                          subtitle: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              if (preview.isNotEmpty)
-                                Text(
-                                  preview,
-                                  style: TextStyle(
-                                    fontSize: r.fs(12),
-                                    color: t.textMuted,
-                                  ),
-                                  overflow: TextOverflow.ellipsis,
-                                  maxLines: 1,
-                                ),
-                              const SizedBox(height: 2),
-                              Row(
-                                children: [
-                                  Text(
-                                    '${date.day}/${date.month}/${date.year} ${date.hour.toString().padLeft(2, '0')}:${date.minute.toString().padLeft(2, '0')}',
-                                    style: TextStyle(
-                                      fontSize: r.fs(10),
-                                      color: t.textMuted,
+                                    PopupMenuItem(
+                                      value: 'rename',
+                                      child: _MenuRow(
+                                        icon: Icons.edit_outlined,
+                                        label: 'Rename',
+                                      ),
                                     ),
-                                  ),
-                                  const SizedBox(width: 8),
-                                  Container(
-                                    width: 3,
-                                    height: 3,
-                                    decoration: const BoxDecoration(
-                                      color: Colors.grey,
-                                      shape: BoxShape.circle,
+                                    PopupMenuItem(
+                                      value: 'delete',
+                                      child: _MenuRow(
+                                        icon: Icons.delete_outline_rounded,
+                                        label: 'Delete',
+                                        color: Colors.red.shade400,
+                                      ),
                                     ),
-                                  ),
-                                  const SizedBox(width: 8),
-                                  Text(
-                                    '$length messages',
-                                    style: TextStyle(
-                                      fontSize: r.fs(10),
-                                      color: t.textMuted,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ],
-                          ),
-                          trailing: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              IconButton(
-                                icon: Icon(
-                                  Icons.download_rounded,
-                                  color: AppColors.sageGreen,
-                                  size: 20,
+                                  ],
                                 ),
-                                onPressed: () => widget.onLoad(id),
-                                tooltip: 'Load conversation',
-                              ),
-                              IconButton(
-                                icon: Icon(
-                                  Icons.edit_outlined,
-                                  color: Colors.orange.shade400,
-                                  size: 20,
-                                ),
-                                onPressed: () => _showRenameDialog(id, name),
-                                tooltip: 'Rename',
-                              ),
-                              IconButton(
-                                icon: Icon(
-                                  Icons.delete_outline_rounded,
-                                  color: Colors.red.shade400,
-                                  size: 20,
-                                ),
-                                onPressed: () => _confirmDelete(id, name),
-                                tooltip: 'Delete conversation',
-                              ),
-                            ],
+                              ],
+                            ),
                           ),
                         ),
                       );
@@ -2424,23 +2904,27 @@ class _SortChip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final t = AppThemeTokens.of(context);
     return GestureDetector(
       onTap: onTap,
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 150),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
         decoration: BoxDecoration(
-          color: selected ? AppColors.sageGreen : Colors.transparent,
-          borderRadius: BorderRadius.circular(12),
+          color: selected ? AppColors.sageGreen : t.card,
+          borderRadius: BorderRadius.circular(20),
           border: Border.all(
-            color: selected ? AppColors.sageGreen : Colors.grey.shade300,
+            color: selected
+                ? AppColors.sageGreen
+                : t.border.withOpacity(0.8),
           ),
         ),
         child: Text(
           label,
           style: TextStyle(
             fontSize: 11,
-            fontWeight: selected ? FontWeight.w600 : FontWeight.w400,
-            color: selected ? Colors.white : Colors.grey.shade600,
+            fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+            color: selected ? Colors.white : t.textMuted,
           ),
         ),
       ),
@@ -2545,12 +3029,22 @@ class _ChatBubble extends StatelessWidget {
                       right: isUser ? 0 : (isDesktop ? 120 : r.wp(48)),
                     ),
                     padding: EdgeInsets.symmetric(
-                      horizontal: r.wp(14),
+                      horizontal: r.wp(15),
                       vertical: r.sp(11),
                     ),
                     decoration: BoxDecoration(
+                      gradient: isUser
+                          ? LinearGradient(
+                              begin: Alignment.topLeft,
+                              end: Alignment.bottomRight,
+                              colors: [
+                                AppColors.sageGreen,
+                                AppColors.sageGreen.withOpacity(0.85),
+                              ],
+                            )
+                          : null,
                       color: isUser
-                          ? AppColors.sageGreen
+                          ? null
                           : message.isError == true
                               ? Colors.red.shade50
                               : t.card,
@@ -2565,14 +3059,14 @@ class _ChatBubble extends StatelessWidget {
                           : Border.all(
                               color: message.isError == true
                                   ? Colors.red.shade200
-                                  : AppColors.sageGreen.withOpacity(0.20),
+                                  : t.border.withOpacity(0.7),
                             ),
                       boxShadow: [
                         BoxShadow(
                           color: (isUser ? AppColors.sageGreen : t.textPrimary)
-                              .withOpacity(0.08),
-                          blurRadius: 8,
-                          offset: const Offset(0, 2),
+                              .withOpacity(isUser ? 0.18 : 0.05),
+                          blurRadius: isUser ? 14 : 8,
+                          offset: const Offset(0, 3),
                         ),
                       ],
                     ),
@@ -2585,7 +3079,8 @@ class _ChatBubble extends StatelessWidget {
                                 ? Colors.red.shade700
                                 : t.textPrimary,
                         fontSize: r.fs(14),
-                        height: 1.45,
+                        height: 1.5,
+                        letterSpacing: -0.1,
                       ),
                     ),
                   ),
@@ -2650,21 +3145,32 @@ class _ChatBubble extends StatelessWidget {
 
   Widget _buildBotAvatar() {
     return Container(
-      width: r.wp(32),
-      height: r.wp(32),
-      margin: EdgeInsets.only(right: r.wp(8)),
+      width: r.wp(30),
+      height: r.wp(30),
+      margin: EdgeInsets.only(right: r.wp(8), top: r.sp(4)),
       decoration: BoxDecoration(
-        color: AppColors.sageGreen.withOpacity(0.12),
-        shape: BoxShape.circle,
-        border: Border.all(
-          color: AppColors.sageGreen.withOpacity(0.2),
-          width: 1.5,
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [
+            AppColors.sageGreen,
+            AppColors.sageGreen.withOpacity(0.7),
+          ],
         ),
+        shape: BoxShape.circle,
+        boxShadow: [
+          BoxShadow(
+            color: AppColors.sageGreen.withOpacity(0.25),
+            blurRadius: 6,
+            offset: const Offset(0, 2),
+          ),
+        ],
       ),
       child: Center(
-        child: Text(
-          '⚕️',
-          style: TextStyle(fontSize: r.fs(16)),
+        child: Icon(
+          Icons.favorite_rounded,
+          color: Colors.white,
+          size: r.fs(14),
         ),
       ),
     );

@@ -20,7 +20,7 @@ class ChatbotService {
   }
 
   static const String _baseUrl = 'https://openrouter.ai/api/v1/chat/completions';
-  static const int _maxTokens = 500;
+  static const int _maxTokens = 750;
   static const int _timeoutSeconds = 30;
   static const int _maxHistoryLength = 20;
 
