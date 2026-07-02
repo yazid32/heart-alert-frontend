@@ -17,15 +17,19 @@ import 'theme/theme_provider.dart';
 import 'screens/assistant_home_screen.dart';
 import 'screens/admin_home_screen.dart';
 import 'screens/waiting_approval_screen.dart';
+import 'screens/subscription_confirmation_screen.dart';
+import 'screens/pricing_screen.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'widgets/responsive_layout.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
+
 final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await dotenv.load();
   AppConfig.flavor = Flavor.production;
+  
   runApp(
     ChangeNotifierProvider(
       create: (_) => ThemeProvider(),
@@ -45,21 +49,18 @@ class _HeartAlertAppState extends State<HeartAlertApp> with WidgetsBindingObserv
   late final AppLinks _appLinks;
   String? _pendingToken;
   bool _isNavigatorReady = false;
+  bool _deepLinksInitialized = false;
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     
-    // Initialize deep links with proper error handling
+    // ✅ Wait for the widget tree to be built before initializing deep links
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      try {
-        _initDeepLinks();
-      } catch (e) {
-        print('❌ Deep link init failed: $e');
-      }
+      _initDeepLinks();
       _isNavigatorReady = true;
-      _checkForPendingToken();
+      _checkForPendingTokens();
     });
   }
 
@@ -70,98 +71,116 @@ class _HeartAlertAppState extends State<HeartAlertApp> with WidgetsBindingObserv
   }
 
   @override
+  void didChangePlatformBrightness() {
+    // ✅ Notify theme provider when system brightness changes
+    final themeProvider = context.read<ThemeProvider>();
+    themeProvider.onSystemThemeChanged();
+  }
+
+  @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
-      _checkForPendingToken();
+      _checkForPendingTokens();
     }
   }
 
-  Future<void> _checkForPendingToken() async {
-    final prefs = await SharedPreferences.getInstance();
-    
-    // Check for reset token
-    final pendingToken = prefs.getString('pending_reset_token');
-    if (pendingToken != null && pendingToken.isNotEmpty) {
-      print('🔑 Found pending reset token: $pendingToken');
-      await prefs.remove('pending_reset_token');
-      _navigateToResetPassword(pendingToken);
-      return;
-    }
-    
-    // Check for invite token
-    final pendingInviteToken = prefs.getString('pending_invite_token');
-    if (pendingInviteToken != null && pendingInviteToken.isNotEmpty) {
-      print('🔑 Found pending invite token: $pendingInviteToken');
-      await prefs.remove('pending_invite_token');
-      _navigateToSignupWithToken(pendingInviteToken);
+  Future<void> _checkForPendingTokens() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      
+      // Check for reset token
+      final pendingToken = prefs.getString('pending_reset_token');
+      if (pendingToken != null && pendingToken.isNotEmpty) {
+        print('🔑 Found pending reset token: $pendingToken');
+        await prefs.remove('pending_reset_token');
+        _navigateToResetPassword(pendingToken);
+        return;
+      }
+      
+      // Check for invite token
+      final pendingInviteToken = prefs.getString('pending_invite_token');
+      if (pendingInviteToken != null && pendingInviteToken.isNotEmpty) {
+        print('🔑 Found pending invite token: $pendingInviteToken');
+        await prefs.remove('pending_invite_token');
+        _navigateToSignupWithToken(pendingInviteToken);
+      }
+    } catch (e) {
+      print('❌ Error checking pending tokens: $e');
     }
   }
 
   void _initDeepLinks() async {
-    _appLinks = AppLinks();
-
+    if (_deepLinksInitialized) return;
+    
     try {
-      final initialLink = await _appLinks.getInitialLink();
-      if (initialLink != null) {
-        String? token = initialLink.queryParameters['token'];
-        String? inviteToken = initialLink.queryParameters['invite_token'];
-        
-        if (token != null) {
-          await _savePendingToken(token);
-        } else if (inviteToken != null) {
-          await _savePendingInviteToken(inviteToken);
-        }
-      }
-    } catch (e) {
-      print('❌ Error getting initial link: $e');
-    }
+      _appLinks = AppLinks();
+      _deepLinksInitialized = true;
+      print('✅ Deep links initialized');
 
-    _appLinks.uriLinkStream.listen((Uri uri) {
-      print('📱 Deep link received while app is running: $uri');
-      if (mounted) {
-        _handleDeepLink(uri);
+      try {
+        final initialLink = await _appLinks.getInitialLink();
+        if (initialLink != null) {
+          print('📱 Initial deep link: $initialLink');
+          _handleDeepLink(initialLink);
+        }
+      } catch (e) {
+        print('❌ Error getting initial link: $e');
       }
-    }, onError: (err) {
-      print('❌ Deep link error: $err');
-    });
+
+      _appLinks.uriLinkStream.listen((Uri uri) {
+        print('📱 Deep link received while app is running: $uri');
+        if (mounted) {
+          _handleDeepLink(uri);
+        }
+      }, onError: (err) {
+        print('❌ Deep link error: $err');
+      });
+    } catch (e) {
+      print('❌ Failed to initialize deep links: $e');
+    }
   }
 
   void _handleDeepLink(Uri uri) {
     print('🔗 Processing deep link: $uri');
     
-    String? token;
-    String? inviteToken;
-    
-    // Handle reset-password deep link
-    if (uri.scheme == 'heartalert' && uri.host == 'reset-password') {
-      token = uri.queryParameters['token'];
-      if (token != null && token.isNotEmpty) {
-        print('🔑 Reset token found: $token');
-        _navigateToResetPassword(token);
-      }
-    }
-    // Handle signup deep link
-    else if (uri.scheme == 'heartalert' && uri.host == 'signup') {
-      inviteToken = uri.queryParameters['invite_token'];
-      if (inviteToken != null && inviteToken.isNotEmpty) {
-        print('🔑 Invite token found for signup: $inviteToken');
-        _navigateToSignupWithToken(inviteToken);
-      }
-    }
-    else if (uri.scheme == 'http' || uri.scheme == 'https') {
-      token = uri.queryParameters['token'];
-      inviteToken = uri.queryParameters['invite_token'];
-      print('⚠️ HTTP/HTTPS link detected.');
+    try {
+      String? token;
+      String? inviteToken;
       
-      if (inviteToken != null && inviteToken.isNotEmpty) {
-        _navigateToSignupWithToken(inviteToken);
-      } else if (token != null && token.isNotEmpty) {
-        _navigateToResetPassword(token);
+      if (uri.scheme == 'heartalert' && uri.host == 'reset-password') {
+        token = uri.queryParameters['token'];
+        if (token != null && token.isNotEmpty) {
+          print('🔑 Reset token found: $token');
+          _navigateToResetPassword(token);
+        }
+      } else if (uri.scheme == 'heartalert' && uri.host == 'signup') {
+        inviteToken = uri.queryParameters['invite_token'];
+        if (inviteToken != null && inviteToken.isNotEmpty) {
+          print('🔑 Invite token found for signup: $inviteToken');
+          _navigateToSignupWithToken(inviteToken);
+        }
+      } else if (uri.scheme == 'heartalert' && uri.host == 'payment-success') {
+        final plan = uri.queryParameters['plan'] ?? 'pro';
+        print('💳 Returned from Stripe checkout, plan=$plan');
+        _navigateToSubscriptionConfirmation(plan);
+      } else if (uri.scheme == 'heartalert' && uri.host == 'payment-cancel') {
+        print('💳 Stripe checkout was canceled by the user');
+        _navigateToPricingWithCancelNotice();
+      } else if (uri.scheme == 'http' || uri.scheme == 'https') {
+        token = uri.queryParameters['token'];
+        inviteToken = uri.queryParameters['invite_token'];
+        if (inviteToken != null && inviteToken.isNotEmpty) {
+          _navigateToSignupWithToken(inviteToken);
+        } else if (token != null && token.isNotEmpty) {
+          _navigateToResetPassword(token);
+        }
       }
-    }
-    
-    if (token == null && inviteToken == null) {
-      print('❌ No valid token found in deep link');
+      
+      if (token == null && inviteToken == null) {
+        print('❌ No valid token found in deep link');
+      }
+    } catch (e) {
+      print('❌ Error handling deep link: $e');
     }
   }
 
@@ -174,12 +193,16 @@ class _HeartAlertAppState extends State<HeartAlertApp> with WidgetsBindingObserv
       return;
     }
 
-    navigatorKey.currentState!.push(
-      MaterialPageRoute(
-        builder: (context) => CreateNewPasswordScreen(token: token),
-        settings: const RouteSettings(name: '/reset-password-ui'),
-      ),
-    );
+    Future.delayed(const Duration(milliseconds: 100), () {
+      if (navigatorKey.currentState != null && mounted) {
+        navigatorKey.currentState!.push(
+          MaterialPageRoute(
+            builder: (context) => CreateNewPasswordScreen(token: token),
+            settings: const RouteSettings(name: '/reset-password-ui'),
+          ),
+        );
+      }
+    });
   }
 
   void _navigateToSignupWithToken(String token) {
@@ -191,29 +214,92 @@ class _HeartAlertAppState extends State<HeartAlertApp> with WidgetsBindingObserv
       return;
     }
 
-    navigatorKey.currentState!.push(
-      MaterialPageRoute(
-        builder: (context) => SignupScreen(inviteToken: token),
-        settings: const RouteSettings(name: '/signup-with-token'),
-      ),
-    );
+    Future.delayed(const Duration(milliseconds: 100), () {
+      if (navigatorKey.currentState != null && mounted) {
+        navigatorKey.currentState!.push(
+          MaterialPageRoute(
+            builder: (context) => SignupScreen(inviteToken: token),
+            settings: const RouteSettings(name: '/signup-with-token'),
+          ),
+        );
+      }
+    });
+  }
+
+  void _navigateToSubscriptionConfirmation(String plan) {
+    if (!_isNavigatorReady || navigatorKey.currentState == null) {
+      print('⚠️ Navigator not ready for payment-success deep link');
+      return;
+    }
+    Future.delayed(const Duration(milliseconds: 100), () {
+      if (navigatorKey.currentState != null && mounted) {
+        navigatorKey.currentState!.push(
+          MaterialPageRoute(
+            builder: (context) => SubscriptionConfirmationScreen(expectedPlan: plan),
+            settings: const RouteSettings(name: '/subscription-confirmation'),
+          ),
+        );
+      }
+    });
+  }
+
+  void _navigateToPricingWithCancelNotice() {
+    if (!_isNavigatorReady || navigatorKey.currentState == null) {
+      print('⚠️ Navigator not ready for payment-cancel deep link');
+      return;
+    }
+    Future.delayed(const Duration(milliseconds: 100), () {
+      if (navigatorKey.currentState != null && mounted) {
+        navigatorKey.currentState!.push(
+          MaterialPageRoute(
+            builder: (context) => const PricingScreen(),
+            settings: const RouteSettings(name: '/pricing-canceled'),
+          ),
+        );
+        ScaffoldMessenger.of(navigatorKey.currentContext!).showSnackBar(
+          const SnackBar(content: Text('Checkout was canceled.')),
+        );
+      }
+    });
   }
 
   Future<void> _savePendingToken(String token) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString('pending_reset_token', token);
-    print('💾 Saved pending reset token for later');
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString('pending_reset_token', token);
+      print('💾 Saved pending reset token for later');
+    } catch (e) {
+      print('❌ Error saving pending token: $e');
+    }
   }
 
   Future<void> _savePendingInviteToken(String token) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString('pending_invite_token', token);
-    print('💾 Saved pending invite token for later');
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString('pending_invite_token', token);
+      print('💾 Saved pending invite token for later');
+    } catch (e) {
+      print('❌ Error saving pending invite token: $e');
+    }
   }
 
   @override
   Widget build(BuildContext context) {
     final themeProvider = context.watch<ThemeProvider>();
+    
+    // ✅ Show loading screen until theme is initialized
+    if (!themeProvider.initialized) {
+      return MaterialApp(
+        home: const Scaffold(
+          body: Center(
+            child: CircularProgressIndicator(
+              color: AppColors.sageGreen,
+            ),
+          ),
+        ),
+        debugShowCheckedModeBanner: false,
+      );
+    }
 
     return MaterialApp(
       title: 'Heart Alert',

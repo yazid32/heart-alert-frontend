@@ -88,6 +88,29 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
             ),
           ),
 
+          // Soft gradient so the illustration eases into the cream panel
+          // instead of cutting off abruptly.
+          Positioned(
+            left: 0,
+            right: 0,
+            bottom: 0,
+            height: 180,
+            child: IgnorePointer(
+              child: Container(
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.topCenter,
+                    end: Alignment.bottomCenter,
+                    colors: [
+                      AppColors.cream.withOpacity(0.0),
+                      AppColors.cream.withOpacity(0.9),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+
           // UI overlay
           SafeArea(
             child: Column(
@@ -99,37 +122,67 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                   child: Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
-                      RichText(
-                        text: TextSpan(
-                          children: [
-                            TextSpan(
-                              text: '${_currentPage + 1}',
-                              style: TextStyle(
-                                color:      AppColors.black,
-                                fontSize:   r.fs(16),
-                                fontWeight: FontWeight.w700,
-                              ),
-                            ),
-                            TextSpan(
-                              text: '/${_pages.length}',
-                              style: TextStyle(
-                                color:      AppColors.black.withOpacity(0.35),
-                                fontSize:   r.fs(16),
-                                fontWeight: FontWeight.w400,
-                              ),
+                      Container(
+                        padding: EdgeInsets.symmetric(
+                            horizontal: r.wp(12), vertical: r.sp(6)),
+                        decoration: BoxDecoration(
+                          color: Colors.white.withOpacity(0.55),
+                          borderRadius: BorderRadius.circular(20),
+                          boxShadow: [
+                            BoxShadow(
+                              color: Colors.black.withOpacity(0.06),
+                              blurRadius: 8,
+                              offset: const Offset(0, 2),
                             ),
                           ],
+                        ),
+                        child: RichText(
+                          text: TextSpan(
+                            children: [
+                              TextSpan(
+                                text: '${_currentPage + 1}',
+                                style: TextStyle(
+                                  color:      AppColors.black,
+                                  fontSize:   r.fs(14),
+                                  fontWeight: FontWeight.w700,
+                                ),
+                              ),
+                              TextSpan(
+                                text: '/${_pages.length}',
+                                style: TextStyle(
+                                  color:      AppColors.black.withOpacity(0.4),
+                                  fontSize:   r.fs(14),
+                                  fontWeight: FontWeight.w500,
+                                ),
+                              ),
+                            ],
+                          ),
                         ),
                       ),
                       if (!isLast)
                         GestureDetector(
                           onTap: _skip,
-                          child: Text(
-                            'Skip',
-                            style: TextStyle(
-                              color:      AppColors.black,
-                              fontSize:   r.fs(15),
-                              fontWeight: FontWeight.w500,
+                          child: Container(
+                            padding: EdgeInsets.symmetric(
+                                horizontal: r.wp(14), vertical: r.sp(6)),
+                            decoration: BoxDecoration(
+                              color: Colors.white.withOpacity(0.55),
+                              borderRadius: BorderRadius.circular(20),
+                              boxShadow: [
+                                BoxShadow(
+                                  color: Colors.black.withOpacity(0.06),
+                                  blurRadius: 8,
+                                  offset: const Offset(0, 2),
+                                ),
+                              ],
+                            ),
+                            child: Text(
+                              'Skip',
+                              style: TextStyle(
+                                color:      AppColors.black,
+                                fontSize:   r.fs(14),
+                                fontWeight: FontWeight.w600,
+                              ),
                             ),
                           ),
                         ),
@@ -145,6 +198,13 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                     color:        AppColors.cream,
                     borderRadius: BorderRadius.vertical(
                         top: Radius.circular(r.sp(26))),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withOpacity(0.10),
+                        blurRadius: 24,
+                        offset: const Offset(0, -8),
+                      ),
+                    ],
                   ),
                   padding: EdgeInsets.fromLTRB(
                       r.hp, r.sp(22), r.hp, r.sp(18)),
@@ -293,6 +353,15 @@ class _NavButton extends StatelessWidget {
               ? null
               : Border.all(
                   color: AppColors.black.withOpacity(0.2), width: 1),
+          boxShadow: filled
+              ? [
+                  BoxShadow(
+                    color: AppColors.sageGreen.withOpacity(0.35),
+                    blurRadius: 14,
+                    offset: const Offset(0, 5),
+                  ),
+                ]
+              : null,
         ),
         child: Text(
           label,

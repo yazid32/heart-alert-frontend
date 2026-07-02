@@ -396,6 +396,8 @@ class _HistoryScreenState extends State<HistoryScreen> {
 }
 
 // ── Prediction card ──────────────────────────
+// In history_screen.dart - Enhanced _PredictionCard
+
 class _PredictionCard extends StatelessWidget {
   final Map<String, dynamic> prediction;
   final String patientName;
@@ -428,41 +430,116 @@ class _PredictionCard extends StatelessWidget {
 
     return GestureDetector(
       onTap: onTap,
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 200),
+      child: Container(
         margin: EdgeInsets.only(bottom: r.sp(10)),
-        padding: EdgeInsets.all(r.sp(14)),
+        padding: EdgeInsets.all(r.sp(16)),
         decoration: BoxDecoration(
-          color: t.card.withOpacity(t.isDark ? 1.0 : 0.6),
-          borderRadius: BorderRadius.circular(r.cardRadius),
-          border: Border.all(color: t.border),
+          color: t.card,
+          borderRadius: BorderRadius.circular(r.sp(16)),
+          border: Border.all(
+            color: riskColor.withOpacity(0.2),
+            width: 1.5,
+          ),
           boxShadow: [
             BoxShadow(
-              color: t.textPrimary.withOpacity(0.04),
-              blurRadius: 8,
-              offset: const Offset(0, 3),
+              color: riskColor.withOpacity(0.06),
+              blurRadius: 12,
+              offset: const Offset(0, 4),
             ),
           ],
         ),
         child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                Expanded(
-                  child: Text(
-                    patientName,
-                    style: TextStyle(
-                      fontSize: r.fs(15),
-                      fontWeight: FontWeight.w700,
-                      color: t.textPrimary,
+                // Patient initials avatar with risk color ring
+                Container(
+                  width: 44,
+                  height: 44,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    border: Border.all(
+                      color: riskColor,
+                      width: 2,
                     ),
-                    overflow: TextOverflow.ellipsis,
+                  ),
+                  child: ClipOval(
+                    child: Container(
+                      color: riskColor.withOpacity(0.1),
+                      child: Center(
+                        child: Text(
+                          _getInitials(patientName),
+                          style: TextStyle(
+                            color: riskColor,
+                            fontSize: r.fs(16),
+                            fontWeight: FontWeight.w800,
+                          ),
+                        ),
+                      ),
+                    ),
                   ),
                 ),
+                SizedBox(width: r.wp(12)),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        patientName,
+                        style: TextStyle(
+                          fontSize: r.fs(15),
+                          fontWeight: FontWeight.w700,
+                          color: t.textPrimary,
+                        ),
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      Row(
+                        children: [
+                          Container(
+                            padding: EdgeInsets.symmetric(
+                              horizontal: r.wp(8),
+                              vertical: r.sp(3),
+                            ),
+                            decoration: BoxDecoration(
+                              color: riskColor.withOpacity(0.1),
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            child: Text(
+                              riskDisplay,
+                              style: TextStyle(
+                                color: riskColor,
+                                fontSize: r.fs(11),
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                          ),
+                          SizedBox(width: r.wp(8)),
+                          Text(
+                            '${riskScore.toInt()}% risk',
+                            style: TextStyle(
+                              color: t.textMuted,
+                              fontSize: r.fs(12),
+                            ),
+                          ),
+                          const Spacer(),
+                          Text(
+                            dateDisplay,
+                            style: TextStyle(
+                              color: t.textMuted,
+                              fontSize: r.fs(11),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+                // Action menu
                 PopupMenuButton<String>(
                   color: t.surface,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
                   onSelected: (value) {
                     if (value == 'export') onExport();
                     if (value == 'share') onShare();
@@ -470,80 +547,77 @@ class _PredictionCard extends StatelessWidget {
                   },
                   itemBuilder: (context) => [
                     PopupMenuItem(
-                        value: 'export',
-                        child: Row(children: [
-                          Icon(Icons.picture_as_pdf,
-                              size: 18, color: t.textPrimary),
-                          const SizedBox(width: 8),
-                          Text('Save PDF',
-                              style: TextStyle(color: t.textPrimary))
-                        ])),
+                      value: 'export',
+                      child: Row(
+                        children: [
+                          Icon(Icons.picture_as_pdf, size: 18, color: t.textPrimary),
+                          const SizedBox(width: 10),
+                          Text('Save PDF', style: TextStyle(color: t.textPrimary)),
+                        ],
+                      ),
+                    ),
                     PopupMenuItem(
-                        value: 'share',
-                        child: Row(children: [
+                      value: 'share',
+                      child: Row(
+                        children: [
                           Icon(Icons.share, size: 18, color: t.textPrimary),
-                          const SizedBox(width: 8),
-                          Text('Share PDF',
-                              style: TextStyle(color: t.textPrimary))
-                        ])),
+                          const SizedBox(width: 10),
+                          Text('Share PDF', style: TextStyle(color: t.textPrimary)),
+                        ],
+                      ),
+                    ),
                     PopupMenuItem(
-                        value: 'delete',
-                        child: Row(children: [
-                          const Icon(Icons.delete_outline,
-                              size: 18, color: Colors.red),
-                          const SizedBox(width: 8),
-                          const Text('Delete',
-                              style: TextStyle(color: Colors.red))
-                        ])),
+                      value: 'delete',
+                      child: Row(
+                        children: [
+                          const Icon(Icons.delete_outline, size: 18, color: Colors.red),
+                          const SizedBox(width: 10),
+                          const Text('Delete', style: TextStyle(color: Colors.red)),
+                        ],
+                      ),
+                    ),
                   ],
-                  child: Icon(Icons.more_vert,
-                      color: t.textMuted, size: r.wp(20)),
-                ),
-              ],
-            ),
-            SizedBox(height: r.sp(8)),
-            Row(
-              children: [
-                Container(
-                  padding: EdgeInsets.symmetric(
-                      horizontal: r.wp(9), vertical: r.sp(4)),
-                  decoration: BoxDecoration(
-                    color: riskColor.withOpacity(0.12),
-                    borderRadius: BorderRadius.circular(8),
+                  child: Container(
+                    padding: const EdgeInsets.all(6),
+                    decoration: BoxDecoration(
+                      color: t.surface,
+                      shape: BoxShape.circle,
+                      border: Border.all(color: t.border),
+                    ),
+                    child: Icon(
+                      Icons.more_vert_rounded,
+                      color: t.textMuted,
+                      size: r.wp(18),
+                    ),
                   ),
-                  child: Text(riskDisplay,
-                      style: TextStyle(
-                        color: riskColor,
-                        fontSize: r.fs(11),
-                        fontWeight: FontWeight.w700,
-                      )),
-                ),
-                SizedBox(width: r.wp(8)),
-                Text(
-                  '${riskScore.toInt()}% risk',
-                  style: TextStyle(color: t.textMuted, fontSize: r.fs(12)),
-                ),
-                const Spacer(),
-                Text(
-                  dateDisplay,
-                  style: TextStyle(color: t.textMuted, fontSize: r.fs(11)),
                 ),
               ],
             ),
-            if (prediction['age'] != null) ...[
-              SizedBox(height: r.sp(6)),
-              Text(
-                'Age ${prediction['age']} · ${prediction['gender'] ?? ''}',
-                style: TextStyle(color: t.textMuted, fontSize: r.fs(12)),
+            // Progress bar for risk score
+            SizedBox(height: r.sp(10)),
+            ClipRRect(
+              borderRadius: BorderRadius.circular(4),
+              child: LinearProgressIndicator(
+                value: riskScore / 100,
+                backgroundColor: t.border,
+                color: riskColor,
+                minHeight: 4,
               ),
-            ],
+            ),
           ],
         ),
       ),
     );
   }
-}
 
+  String _getInitials(String name) {
+    final parts = name.split(' ');
+    if (parts.length >= 2) {
+      return '${parts[0][0]}${parts[1][0]}'.toUpperCase();
+    }
+    return name.isNotEmpty ? name[0].toUpperCase() : '?';
+  }
+}
 // ── Detail bottom sheet ──────────────────────
 class _PredictionDetailSheet extends StatelessWidget {
   final Map<String, dynamic> prediction;

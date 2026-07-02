@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../theme/app_theme.dart';
 import '../services/api_service.dart';
 import '../services/token_service.dart';
@@ -78,36 +79,38 @@ void _login() async {
       rememberMe: _keepSaved,
     );
 
+    // ✅ Save tokens
     await TokenService.saveTokens(
       response['access_token'],
       response['refresh_token'],
       _keepSaved,
     );
 
-    final user = User.fromJson(response);
-      print('🔍 User from response - subscriptionPlan: ${user.subscriptionPlan}');
-  print('🔍 User from response - plan: ${user.plan}');
-  print('🔍 User from response - isHospitalAdmin: ${user.isHospitalAdmin}');
+    // ✅ ALSO save to direct keys for chatbot
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('auth_token', response['access_token']);
+    await prefs.setString('access_token', response['access_token']);
+    print('✅ Token saved to SharedPreferences for chatbot');
 
+    final user = User.fromJson(response);
+    
+    // ✅ Save user
     await TokenService.saveUser(user);
-  // Test retrieve
-  final savedUser = await TokenService.getUser();
-  print('🔍 Retrieved user - subscriptionPlan: ${savedUser?.subscriptionPlan}');
-  print('🔍 Retrieved user - isHospitalAdmin: ${savedUser?.isHospitalAdmin}');
+    
+    print('🔍 User from response - subscriptionPlan: ${user.subscriptionPlan}');
+    print('🔍 User from response - plan: ${user.plan}');
+
     if (mounted) {
-      // CHECK IF USER IS PENDING
       if (user.status == 'pending') {
-        // Go to waiting approval screen with email
         Navigator.pushReplacement(
           context,
           MaterialPageRoute(
             builder: (context) => WaitingApprovalScreen(
-              email: user.email,  // PASS THE EMAIL
+              email: user.email,
             ),
           ),
         );
       } else {
-        // Navigate directly based on role — avoids AuthWrapper FutureBuilder cache issue
         Widget destination;
         switch (user.role.toLowerCase()) {
           case 'admin':
@@ -143,7 +146,6 @@ void _login() async {
     if (mounted) setState(() => _isLoading = false);
   }
 }
-
   void _signUp() => Navigator.pushNamed(context, '/signup');
 
   @override
@@ -172,18 +174,37 @@ void _login() async {
         child: SingleChildScrollView(
           child: ConstrainedBox(
             constraints: BoxConstraints(minHeight: size.height),
-            child: Padding(
-              padding: EdgeInsets.symmetric(horizontal: r.hp),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  SizedBox(height: r.sp(52)),
-                  _BrandMark(r: r),
-                  SizedBox(height: r.sp(44)),
-                  ..._formFields(r),
-                  SizedBox(height: r.sp(32)),
-                ],
-              ),
+            child: Stack(
+              children: [
+                // Decorative soft glow behind the brand mark — echoes the
+                // gradient brand panel used on wide screens without
+                // competing with the form below.
+                Positioned(
+                  top: -60,
+                  right: -80,
+                  child: Container(
+                    width: 220,
+                    height: 220,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: AppColors.sageGreen.withOpacity(0.10),
+                    ),
+                  ),
+                ),
+                Padding(
+                  padding: EdgeInsets.symmetric(horizontal: r.hp),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      SizedBox(height: r.sp(52)),
+                      _BrandMark(r: r),
+                      SizedBox(height: r.sp(44)),
+                      ..._formFields(r),
+                      SizedBox(height: r.sp(32)),
+                    ],
+                  ),
+                ),
+              ],
             ),
           ),
         ),
@@ -300,21 +321,31 @@ void _login() async {
 
       if (_loginError != null)
         Padding(
-          padding: EdgeInsets.only(top: r.sp(10), left: 4),
-          child: Row(
-            children: [
-              Icon(Icons.error_outline,
-                  size: 14, color: Colors.red.shade400),
-              SizedBox(width: r.wp(5)),
-              Expanded(
-                child: Text(
-                  _loginError!,
-                  style: TextStyle(
-                      color: Colors.red.shade400,
-                      fontSize: r.fs(13)),
+          padding: EdgeInsets.only(top: r.sp(12)),
+          child: Container(
+            padding: EdgeInsets.symmetric(
+                horizontal: r.wp(12), vertical: r.sp(10)),
+            decoration: BoxDecoration(
+              color: Colors.red.shade50,
+              borderRadius: BorderRadius.circular(r.sp(12)),
+              border: Border.all(color: Colors.red.shade100),
+            ),
+            child: Row(
+              children: [
+                Icon(Icons.error_outline,
+                    size: 16, color: Colors.red.shade400),
+                SizedBox(width: r.wp(8)),
+                Expanded(
+                  child: Text(
+                    _loginError!,
+                    style: TextStyle(
+                        color: Colors.red.shade600,
+                        fontWeight: FontWeight.w500,
+                        fontSize: r.fs(13)),
+                  ),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
         ),
 

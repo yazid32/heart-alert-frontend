@@ -193,11 +193,10 @@ class _PatientsScreenState extends State<PatientsScreen> {
           width: 52,
           height: 52,
           decoration: BoxDecoration(
-            color: Colors.red.withOpacity(0.1),
+            color: t.dangerBg,
             shape: BoxShape.circle,
           ),
-          child: const Icon(Icons.delete_outline_rounded,
-              color: Colors.red, size: 26),
+          child: Icon(Icons.delete_outline_rounded, color: t.danger, size: 26),
         ),
         title: const Text('Delete Patient'),
         content: Text(
@@ -212,8 +211,7 @@ class _PatientsScreenState extends State<PatientsScreen> {
             style: OutlinedButton.styleFrom(
               foregroundColor: t.textPrimary,
               side: BorderSide(color: t.border),
-              shape:
-                  RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
               padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
             ),
             child: const Text('Cancel'),
@@ -221,11 +219,10 @@ class _PatientsScreenState extends State<PatientsScreen> {
           ElevatedButton(
             onPressed: () => Navigator.pop(context, true),
             style: ElevatedButton.styleFrom(
-              backgroundColor: Colors.red,
+              backgroundColor: t.danger,
               foregroundColor: Colors.white,
               elevation: 0,
-              shape:
-                  RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
               padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
             ),
             child: const Text('Delete'),
@@ -1191,6 +1188,8 @@ class _PatientsScreenState extends State<PatientsScreen> {
   }
 }
 
+// In patient_screen.dart - Enhanced _PatientCard
+
 class _PatientCard extends StatefulWidget {
   final Map<String, dynamic> patient;
   final int age;
@@ -1233,23 +1232,34 @@ class _PatientCardState extends State<_PatientCard> {
             .toUpperCase();
 
     final card = AnimatedContainer(
-      duration: const Duration(milliseconds: 150),
+      duration: const Duration(milliseconds: 250),
+      transform: Matrix4.identity()..scale(_hovering ? 1.02 : 1.0),
       padding: EdgeInsets.symmetric(
-          horizontal: widget.isGrid ? 16 : 14, vertical: widget.isGrid ? 16 : 12),
+        horizontal: widget.isGrid ? 18 : 16,
+        vertical: widget.isGrid ? 18 : 14,
+      ),
       decoration: BoxDecoration(
         color: t.surface,
         borderRadius: BorderRadius.circular(r.cardRadius),
         border: Border.all(
-            color: _hovering ? AppColors.sageGreen.withOpacity(0.45) : t.border),
+          color: _hovering ? AppColors.sageGreen.withOpacity(0.4) : t.border,
+          width: _hovering ? 1.5 : 1,
+        ),
         boxShadow: _hovering
             ? [
                 BoxShadow(
                   color: AppColors.sageGreen.withOpacity(0.12),
-                  blurRadius: 18,
+                  blurRadius: 20,
                   offset: const Offset(0, 8),
                 ),
               ]
-            : const [],
+            : [
+                BoxShadow(
+                  color: t.textPrimary.withOpacity(0.03),
+                  blurRadius: 8,
+                  offset: const Offset(0, 2),
+                ),
+              ],
       ),
       child: widget.isGrid
           ? _gridLayout(t, r, avatarColor, initials, firstName, lastName, gender)
@@ -1260,38 +1270,83 @@ class _PatientCardState extends State<_PatientCard> {
       cursor: SystemMouseCursors.click,
       onEnter: (_) => setState(() => _hovering = true),
       onExit: (_) => setState(() => _hovering = false),
-      child: GestureDetector(onTap: widget.onView, child: card),
+      child: GestureDetector(
+        onTap: widget.onView,
+        child: card,
+      ),
     );
   }
 
   Widget _listLayout(AppThemeTokens t, Responsive r, Color avatarColor,
       String initials, String firstName, String lastName, String gender) {
+    final patient = widget.patient;
+    final phone = (patient['phone'] ?? '').toString();
+
     return Row(
+      crossAxisAlignment: CrossAxisAlignment.center,
       children: [
+        // Avatar
         _avatar(avatarColor, initials, 46),
-        const SizedBox(width: 12),
+        const SizedBox(width: 14),
+
+        // Name + meta — takes all remaining space
         Expanded(
-            child:
-                _infoColumn(t, r, avatarColor, firstName, lastName, gender)),
-        Row(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                '$firstName $lastName',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  fontSize: r.fs(14),
+                  fontWeight: FontWeight.w700,
+                  color: t.textPrimary,
+                ),
+              ),
+              const SizedBox(height: 5),
+              Wrap(
+                spacing: 6,
+                runSpacing: 4,
+                children: [
+                  if (widget.age > 0)
+                    _Chip(
+                      label: '${widget.age} yrs',
+                      color: t.accent,
+                    ),
+                  if (gender.isNotEmpty)
+                    _Chip(
+                      label: patient['gender'],
+                      color: avatarColor,
+                    ),
+                  if (phone.isNotEmpty)
+                    _Chip(
+                      label: phone,
+                      color: t.textMuted,
+                      icon: Icons.phone_outlined,
+                    ),
+                ],
+              ),
+            ],
+          ),
+        ),
+
+        // Actions column — vertically stacked, no overflow
+        const SizedBox(width: 10),
+        Column(
           mainAxisSize: MainAxisSize.min,
           children: [
             _IconActionButton(
               icon: Icons.edit_outlined,
-              color: t.textPrimary.withOpacity(0.6),
+              color: t.textMuted,
               onTap: widget.onEdit,
             ),
-            const SizedBox(width: 2),
+            const SizedBox(height: 6),
             _IconActionButton(
               icon: Icons.delete_outline_rounded,
-              color: Colors.red.withOpacity(0.7),
+              color: t.danger,
               onTap: widget.onDelete,
-            ),
-            const SizedBox(width: 2),
-            _IconActionButton(
-              icon: Icons.chevron_right_rounded,
-              color: AppColors.sageGreen,
-              onTap: widget.onView,
             ),
           ],
         ),
@@ -1301,43 +1356,87 @@ class _PatientCardState extends State<_PatientCard> {
 
   Widget _gridLayout(AppThemeTokens t, Responsive r, Color avatarColor,
       String initials, String firstName, String lastName, String gender) {
+    final patient = widget.patient;
+    final phone = (patient['phone'] ?? '').toString();
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
       children: [
         Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
+          crossAxisAlignment: CrossAxisAlignment.center,
           children: [
             _avatar(avatarColor, initials, 48),
             const SizedBox(width: 12),
             Expanded(
-                child:
-                    _infoColumn(t, r, avatarColor, firstName, lastName, gender)),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    '$firstName $lastName',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontSize: r.fs(14),
+                      fontWeight: FontWeight.w700,
+                      color: t.textPrimary,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Wrap(
+                    spacing: 5,
+                    children: [
+                      if (widget.age > 0)
+                        _Chip(label: '${widget.age} yrs', color: t.accent),
+                      if (gender.isNotEmpty)
+                        _Chip(label: patient['gender'], color: avatarColor),
+                    ],
+                  ),
+                ],
+              ),
+            ),
           ],
         ),
+        if (phone.isNotEmpty) ...[
+          const SizedBox(height: 10),
+          Row(
+            children: [
+              Icon(Icons.phone_outlined, size: 12, color: t.textMuted),
+              const SizedBox(width: 5),
+              Expanded(
+                child: Text(
+                  phone,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(fontSize: 12, color: t.textMuted),
+                ),
+              ),
+            ],
+          ),
+        ],
         const Spacer(),
-        Container(height: 1, color: t.border),
-        const SizedBox(height: 8),
+        Divider(height: 12, color: t.divider),
         Row(
           children: [
             Expanded(
               child: Text(
-                'View details',
+                'View details →',
                 style: TextStyle(
-                  fontSize: 12.5,
-                  color: AppColors.sageGreen,
-                  fontWeight: FontWeight.w700,
+                  fontSize: 12,
+                  color: t.accent,
+                  fontWeight: FontWeight.w600,
                 ),
               ),
             ),
             _IconActionButton(
               icon: Icons.edit_outlined,
-              color: t.textPrimary.withOpacity(0.6),
+              color: t.textMuted,
               onTap: widget.onEdit,
             ),
-            const SizedBox(width: 2),
+            const SizedBox(width: 4),
             _IconActionButton(
               icon: Icons.delete_outline_rounded,
-              color: Colors.red.withOpacity(0.7),
+              color: t.danger,
               onTap: widget.onDelete,
             ),
           ],
@@ -1351,14 +1450,25 @@ class _PatientCardState extends State<_PatientCard> {
       width: size,
       height: size,
       decoration: BoxDecoration(
-        color: color.withOpacity(0.14),
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [
+            color.withOpacity(0.15),
+            color.withOpacity(0.05),
+          ],
+        ),
         borderRadius: BorderRadius.circular(size * 0.28),
+        border: Border.all(color: color.withOpacity(0.2), width: 1.5),
       ),
       child: Center(
         child: Text(
           initials.isNotEmpty ? initials : '?',
           style: TextStyle(
-              color: color, fontSize: size * 0.34, fontWeight: FontWeight.w800),
+            color: color,
+            fontSize: size * 0.38,
+            fontWeight: FontWeight.w800,
+          ),
         ),
       ),
     );
@@ -1381,18 +1491,28 @@ class _PatientCardState extends State<_PatientCard> {
             color: t.textPrimary,
           ),
         ),
-        const SizedBox(height: 3),
+        const SizedBox(height: 4),
         Row(
           children: [
-            Text(
-              widget.age > 0 ? '${widget.age} yrs' : 'Age unknown',
-              style: TextStyle(fontSize: 12, color: t.textMuted),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+              decoration: BoxDecoration(
+                color: AppColors.sageGreen.withOpacity(0.1),
+                borderRadius: BorderRadius.circular(6),
+              ),
+              child: Text(
+                widget.age > 0 ? '${widget.age} yrs' : 'Age unknown',
+                style: TextStyle(
+                  fontSize: 11,
+                  color: AppColors.sageGreen,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
             ),
             if (gender.isNotEmpty) ...[
-              Text(' · ', style: TextStyle(color: t.textMuted, fontSize: 12)),
+              const SizedBox(width: 6),
               Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
                 decoration: BoxDecoration(
                   color: avatarColor.withOpacity(0.1),
                   borderRadius: BorderRadius.circular(6),
@@ -1411,15 +1531,57 @@ class _PatientCardState extends State<_PatientCard> {
         ),
         if (phone.isNotEmpty)
           Padding(
-            padding: const EdgeInsets.only(top: 2),
-            child: Text(
-              phone,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: TextStyle(fontSize: 11, color: t.textMuted),
+            padding: const EdgeInsets.only(top: 4),
+            child: Row(
+              children: [
+                Icon(Icons.phone_outlined, size: 12, color: t.textMuted),
+                const SizedBox(width: 4),
+                Text(
+                  phone,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(fontSize: 11, color: t.textMuted),
+                ),
+              ],
             ),
           ),
       ],
+    );
+  }
+}
+
+class _Chip extends StatelessWidget {
+  final String label;
+  final Color color;
+  final IconData? icon;
+
+  const _Chip({required this.label, required this.color, this.icon});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.1),
+        borderRadius: BorderRadius.circular(6),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (icon != null) ...[
+            Icon(icon, size: 10, color: color),
+            const SizedBox(width: 3),
+          ],
+          Text(
+            label,
+            style: TextStyle(
+              fontSize: 11,
+              color: color,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ],
+      ),
     );
   }
 }
@@ -1444,14 +1606,13 @@ class _IconActionButton extends StatelessWidget {
         height: 34,
         decoration: BoxDecoration(
           color: color.withOpacity(0.08),
-          borderRadius: BorderRadius.circular(9),
+          borderRadius: BorderRadius.circular(8),
         ),
         child: Icon(icon, size: 18, color: color),
       ),
     );
   }
 }
-
 class _SectionHeader extends StatelessWidget {
   final String text;
   final AppThemeTokens t;

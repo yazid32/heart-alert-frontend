@@ -186,8 +186,8 @@ class _IntroScreenState extends State<IntroScreen>
                             style: TextStyle(
                               color: Colors.white,
                               fontSize: 22,
-                              fontWeight: FontWeight.w600,
-                              letterSpacing: 3.5,
+                              fontWeight: FontWeight.w800,
+                              letterSpacing: 3.0,
                             ),
                           ),
                         ],

@@ -5,7 +5,8 @@ import '../../services/api_service.dart';
 import '../../theme/app_theme.dart';
 import '../../utils/responsive_utils.dart';
 import 'hospital_doctors_screen.dart';
-
+import '../../theme/theme_provider.dart';
+import 'package:provider/provider.dart';
 class HospitalDashboardScreen extends StatefulWidget {
   const HospitalDashboardScreen({super.key});
 
@@ -62,6 +63,7 @@ class _HospitalDashboardScreenState extends State<HospitalDashboardScreen>
   Widget build(BuildContext context) {
     final r = Responsive.of(context);
     final t = AppThemeTokens.of(context);
+    final themeProvider = context.watch<ThemeProvider>(); // ✅ Add this
 
     // 1. Wrap the entire Scaffold in LayoutBuilder to determine screen type safely
     return LayoutBuilder(
@@ -378,7 +380,6 @@ class _NavItem extends StatelessWidget {
   }
 }
 
-// ── Hospital Home Tab ─────────────────────────────────────────────────────────
 class HospitalHomeTab extends StatelessWidget {
   final Map<String, dynamic>? stats;
   final bool isLoading;
@@ -396,31 +397,37 @@ class HospitalHomeTab extends StatelessWidget {
     final r = Responsive.of(context);
     final t = AppThemeTokens.of(context);
 
-    return RefreshIndicator(
-      color: AppColors.sageGreen,
-      backgroundColor: t.surface,
-      onRefresh: () async => onRefresh(),
-      child: SingleChildScrollView(
-        physics: const AlwaysScrollableScrollPhysics(),
-        padding: EdgeInsets.fromLTRB(r.wp(16), r.sp(20), r.wp(16), r.sp(48)),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            _HospitalHeader(r: r, t: t),
-            SizedBox(height: r.sp(28)),
-
-            if (isLoading)
-              _LoadingGrid(r: r, t: t)
-            else if (stats != null) ...[
-              _StatsSection(stats: stats!, r: r, t: t),
-            ],
-          ],
-        ),
-      ),
+    return Consumer<ThemeProvider>(
+      builder: (context, themeProvider, child) {
+        return RefreshIndicator(
+          color: AppColors.sageGreen,
+          backgroundColor: t.surface,
+          onRefresh: () async => onRefresh(),
+          child: SingleChildScrollView(
+            physics: const AlwaysScrollableScrollPhysics(),
+            padding: EdgeInsets.fromLTRB(r.wp(16), r.sp(20), r.wp(16), r.sp(48)),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                _HospitalHeader(
+                  r: r,
+                  t: t,
+                  themeProvider: themeProvider,
+                ),
+                SizedBox(height: r.sp(28)),
+                if (isLoading)
+                  _LoadingGrid(r: r, t: t)
+                else if (stats != null) ...[
+                  _StatsSection(stats: stats!, r: r, t: t),
+                ],
+              ],
+            ),
+          ),
+        );
+      },
     );
   }
 }
-
 // ── Loading skeleton grid ─────────────────────────────────────────────────────
 class _LoadingGrid extends StatelessWidget {
   final Responsive r;
@@ -584,31 +591,32 @@ class _StatsSection extends StatelessWidget {
   }
 }
 
-// ── Hospital Header ───────────────────────────────────────────────────────────
 class _HospitalHeader extends StatelessWidget {
   final Responsive r;
   final AppThemeTokens t;
+  final ThemeProvider themeProvider;
 
-  const _HospitalHeader({required this.r, required this.t});
+  const _HospitalHeader({
+    required this.r,
+    required this.t,
+    required this.themeProvider,
+  });
 
   Future<void> _logout(BuildContext context) async {
     final confirm = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
         backgroundColor: t.surface,
-        shape:
-            RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
         title: Text('Sign out',
-            style: TextStyle(
-                color: t.textPrimary, fontWeight: FontWeight.w800)),
+            style: TextStyle(color: t.textPrimary, fontWeight: FontWeight.w800)),
         content: Text('Are you sure you want to sign out?',
             style: TextStyle(color: t.textMuted, fontSize: 14)),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx, false),
             child: Text('Cancel',
-                style: TextStyle(
-                    color: t.textMuted, fontWeight: FontWeight.w600)),
+                style: TextStyle(color: t.textMuted, fontWeight: FontWeight.w600)),
           ),
           ElevatedButton(
             onPressed: () => Navigator.pop(ctx, true),
@@ -684,6 +692,25 @@ class _HospitalHeader extends StatelessWidget {
             ],
           ),
         ),
+        // ✅ Theme Toggle
+        Container(
+          decoration: BoxDecoration(
+            color: t.surface,
+            borderRadius: BorderRadius.circular(11),
+            border: Border.all(color: t.border.withOpacity(0.5)),
+          ),
+          child: IconButton(
+            icon: Icon(
+              themeProvider.getThemeModeIcon(),
+              color: t.textPrimary.withOpacity(0.6),
+              size: 20,
+            ),
+            onPressed: () => themeProvider.toggleTheme(),
+            tooltip: 'Theme: ${themeProvider.getThemeModeLabel()}',
+            style: IconButton.styleFrom(padding: const EdgeInsets.all(10)),
+          ),
+        ),
+        SizedBox(width: r.wp(8)),
         // Sign out button
         GestureDetector(
           onTap: () => _logout(context),

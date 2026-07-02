@@ -8,6 +8,9 @@ import '../utils/responsive_utils.dart';
 import 'admin_users_screen.dart';
 import 'admin_requests_screen.dart';
 import 'admin_support_screen.dart';
+import 'package:provider/provider.dart';
+import '../theme/theme_provider.dart';  // ✅ Already imported
+
 
 class AdminHomeScreen extends StatefulWidget {
   const AdminHomeScreen({super.key});
@@ -51,6 +54,7 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
   Widget build(BuildContext context) {
     final r = Responsive.of(context);
     final t = AppThemeTokens.of(context);
+  final themeProvider = context.watch<ThemeProvider>(); // ✅ Add this
 
     if (_isLoading) {
       return Scaffold(
@@ -75,11 +79,45 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
                 currentIndex: _currentIndex,
                 onSelect: setCurrentIndex,
                 t: t,
+                themeProvider: themeProvider, // ✅ Pass it
               ),
               Expanded(
                 child: IndexedStack(
                   index: _currentIndex,
-                  children: _pages,
+                  children:[
+                  // ✅ Add top bar with theme toggle
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(24, 16, 24, 8),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.end,
+                      children: [
+                        Container(
+                          decoration: BoxDecoration(
+                            color: t.surface,
+                            borderRadius: BorderRadius.circular(11),
+                            border: Border.all(color: t.border.withOpacity(0.5)),
+                          ),
+                          child: IconButton(
+                            icon: Icon(
+                              themeProvider.getThemeModeIcon(),
+                              color: t.textPrimary.withOpacity(0.6),
+                              size: 20,
+                            ),
+                            onPressed: () => themeProvider.toggleTheme(),
+                            tooltip: 'Theme: ${themeProvider.getThemeModeLabel()}',
+                            style: IconButton.styleFrom(padding: const EdgeInsets.all(10)),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  Expanded(
+                    child: IndexedStack(
+                      index: _currentIndex,
+                      children: _pages,
+                    ),
+                  ),
+                  ],
                 ),
               ),
             ],
@@ -136,11 +174,13 @@ class _AdminSidebar extends StatelessWidget {
   final int currentIndex;
   final ValueChanged<int> onSelect;
   final AppThemeTokens t;
+ final ThemeProvider themeProvider; // ✅ Add this
 
   const _AdminSidebar({
     required this.currentIndex,
     required this.onSelect,
     required this.t,
+    required this.themeProvider,
   });
 
   static const _items = [
@@ -196,6 +236,23 @@ class _AdminSidebar extends StatelessWidget {
                     fontSize: 15,
                     fontWeight: FontWeight.w800,
                     letterSpacing: -0.3,
+                  ),
+                ),
+                Container(
+                  decoration: BoxDecoration(
+                    color: t.surface,
+                    borderRadius: BorderRadius.circular(11),
+                    border: Border.all(color: t.border.withOpacity(0.5)),
+                  ),
+                  child: IconButton(
+                    icon: Icon(
+                      themeProvider.getThemeModeIcon(),
+                      color: t.textPrimary.withOpacity(0.6),
+                      size: 18,
+                    ),
+                    onPressed: () => themeProvider.toggleTheme(),
+                    tooltip: 'Theme: ${themeProvider.getThemeModeLabel()}',
+                    style: IconButton.styleFrom(padding: const EdgeInsets.all(6)),
                   ),
                 ),
               ],
@@ -470,6 +527,7 @@ class _AdminHeader extends StatelessWidget {
             ],
           ),
         ),
+        
         IconButton(
           onPressed: () => _logout(context),
           style: IconButton.styleFrom(backgroundColor: Colors.red.withOpacity(0.08), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)), padding: EdgeInsets.all(r.sp(10))),

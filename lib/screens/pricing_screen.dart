@@ -1,6 +1,7 @@
 // lib/screens/pricing_screen.dart
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
+import 'package:intl/intl.dart';
 import '../services/token_service.dart';
 import '../services/api_service.dart';
 import '../theme/app_theme.dart';
@@ -17,8 +18,10 @@ class PricingScreen extends StatefulWidget {
 class _PricingScreenState extends State<PricingScreen> with TickerProviderStateMixin {
   List<dynamic> _plans = [];
   bool _isLoading = true;
+  bool _isSubscribing = false;
   bool _showInDZD = true;
   String? _currentPlan;
+  Map<String, dynamic>? _subscriptionInfo;
   late AnimationController _fadeController;
   late Animation<double> _fadeAnimation;
 
@@ -40,17 +43,8 @@ class _PricingScreenState extends State<PricingScreen> with TickerProviderStateM
   Future<void> _loadPlans() async {
     try {
       final plans = await ApiService.getPricingPlans();
-      final token = await TokenService.getToken();
-      String? currentPlan;
-      if (token != null) {
-        try {
-          final sub = await ApiService.getMySubscription(token);
-          currentPlan = sub['plan'];
-        } catch (e) {}
-      }
       setState(() {
         _plans = plans;
-        _currentPlan = currentPlan ?? 'freemium';
         _isLoading = false;
       });
       _fadeController.forward();
@@ -65,12 +59,21 @@ class _PricingScreenState extends State<PricingScreen> with TickerProviderStateM
     if (token != null) {
       try {
         final sub = await ApiService.getMySubscription(token);
-        setState(() => _currentPlan = sub['plan']);
+        setState(() {
+          _subscriptionInfo = sub;
+          _currentPlan = sub['plan'] ?? 'freemium';
+        });
       } catch (e) {
-        _currentPlan = 'freemium';
+        setState(() {
+          _subscriptionInfo = null;
+          _currentPlan = 'freemium';
+        });
       }
     } else {
-      _currentPlan = 'freemium';
+      setState(() {
+        _subscriptionInfo = null;
+        _currentPlan = 'freemium';
+      });
     }
   }
 
@@ -91,11 +94,13 @@ class _PricingScreenState extends State<PricingScreen> with TickerProviderStateM
   }
 
   Future<void> _subscribe(String planName) async {
+    if (_isSubscribing) return; // prevent double/triple taps firing multiple checkout sessions
     final token = await TokenService.getToken();
     if (token == null) {
       if (mounted) Navigator.pushNamed(context, '/login');
       return;
     }
+    setState(() => _isSubscribing = true);
     try {
       String successUrl;
       String cancelUrl;
@@ -103,8 +108,11 @@ class _PricingScreenState extends State<PricingScreen> with TickerProviderStateM
         successUrl = 'https://heartalert.netlify.app/';
         cancelUrl = 'https://heartalert.netlify.app/';
       } else {
-        successUrl = 'https://heartalert.netlify.app/#/profile';
-        cancelUrl = 'https://heartalert.netlify.app/#/pricing';
+        // Deep link back into the app instead of opening the website.
+        // AndroidManifest.xml already has a catch-all intent-filter for the
+        // heartalert:// scheme, so no manifest changes are needed.
+        successUrl = 'heartalert://payment-success?plan=$planName';
+        cancelUrl = 'heartalert://payment-cancel';
       }
       final session = await ApiService.createCheckoutSession(
         token: token,
@@ -113,8 +121,22 @@ class _PricingScreenState extends State<PricingScreen> with TickerProviderStateM
         cancelUrl: cancelUrl,
       );
       final Uri url = Uri.parse(session['session_url']);
-      if (await canLaunchUrl(url)) {
-        await launchUrl(url, mode: LaunchMode.externalApplication);
+      final launched = await launchUrl(url, mode: LaunchMode.externalApplication);
+      if (!launched && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Row(
+              children: [
+                const Icon(Icons.error_outline, color: Colors.white, size: 18),
+                const SizedBox(width: 8),
+                const Expanded(child: Text('Could not open the checkout page. Please try again.')),
+              ],
+            ),
+            backgroundColor: Colors.red.shade600,
+            behavior: SnackBarBehavior.floating,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          ),
+        );
       }
     } catch (e) {
       if (mounted) {
@@ -133,6 +155,8 @@ class _PricingScreenState extends State<PricingScreen> with TickerProviderStateM
           ),
         );
       }
+    } finally {
+      if (mounted) setState(() => _isSubscribing = false);
     }
   }
 
@@ -143,67 +167,75 @@ class _PricingScreenState extends State<PricingScreen> with TickerProviderStateM
       builder: (context) => AlertDialog(
         backgroundColor: AppThemeTokens.of(context).surface,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        insetPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 24),
         title: Row(
           children: [
             Icon(Icons.warning_amber_rounded, color: Colors.red.shade400, size: 28),
-            SizedBox(width: 12),
-            Text(
-              'Cancel Subscription?',
-              style: TextStyle(
-                fontWeight: FontWeight.bold,
-                color: AppThemeTokens.of(context).textPrimary,
+            const SizedBox(width: 12),
+            Expanded(
+              child: Text(
+                'Cancel Subscription?',
+                style: TextStyle(
+                  fontWeight: FontWeight.bold,
+                  color: AppThemeTokens.of(context).textPrimary,
+                ),
               ),
             ),
           ],
         ),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              'Are you sure you want to cancel your subscription?',
-              style: TextStyle(
-                color: AppThemeTokens.of(context).textPrimary,
-                fontSize: 14,
+        content: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 380),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Are you sure you want to cancel your subscription?',
+                style: TextStyle(
+                  color: AppThemeTokens.of(context).textPrimary,
+                  fontSize: 14,
+                ),
               ),
-            ),
-            SizedBox(height: 12),
-            Container(
-              padding: EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: Colors.orange.withOpacity(0.1),
-                borderRadius: BorderRadius.circular(10),
-                border: Border.all(color: Colors.orange.withOpacity(0.3)),
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    '⚠️ This will:',
-                    style: TextStyle(
-                      fontWeight: FontWeight.w600,
-                      color: Colors.orange.shade700,
-                      fontSize: 12,
+              const SizedBox(height: 12),
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Colors.orange.withOpacity(0.1),
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: Colors.orange.withOpacity(0.3)),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      '⚠️ This will:',
+                      style: TextStyle(
+                        fontWeight: FontWeight.w600,
+                        color: Colors.orange.shade700,
+                        fontSize: 12,
+                      ),
                     ),
-                  ),
-                  SizedBox(height: 4),
-                  Text(
-                    '• Lose access to Pro features immediately',
-                    style: TextStyle(fontSize: 11, color: AppThemeTokens.of(context).textMuted),
-                  ),
-                  Text(
-                    '• Revert to Freemium plan',
-                    style: TextStyle(fontSize: 11, color: AppThemeTokens.of(context).textMuted),
-                  ),
-                  Text(
-                    '• No refund for remaining time',
-                    style: TextStyle(fontSize: 11, color: AppThemeTokens.of(context).textMuted),
-                  ),
-                ],
+                    const SizedBox(height: 4),
+                    Text(
+                      '• Lose access to Pro features immediately',
+                      style: TextStyle(fontSize: 11, color: AppThemeTokens.of(context).textMuted),
+                    ),
+                    Text(
+                      '• Revert to Freemium plan',
+                      style: TextStyle(fontSize: 11, color: AppThemeTokens.of(context).textMuted),
+                    ),
+                    Text(
+                      '• No refund for remaining time',
+                      style: TextStyle(fontSize: 11, color: AppThemeTokens.of(context).textMuted),
+                    ),
+                  ],
+                ),
               ),
-            ),
-          ],
+            ],
+          ),
         ),
+        actionsPadding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+        actionsOverflowButtonSpacing: 8,
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context, false),
@@ -310,6 +342,13 @@ class _PricingScreenState extends State<PricingScreen> with TickerProviderStateM
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             _PricingHeader(r: r, t: t, centered: isWide),
+                            if (_subscriptionInfo != null &&
+                                ((_currentPlan != null && _currentPlan != 'freemium') ||
+                                    _subscriptionInfo!['status'] == 'past_due' ||
+                                    _subscriptionInfo!['is_hospital_linked'] == true)) ...[
+                              SizedBox(height: r.sp(20)),
+                              _SubscriptionSummaryBanner(info: _subscriptionInfo!, r: r, t: t),
+                            ],
                             SizedBox(height: r.sp(32)),
                             if (isWide)
                               Wrap(
@@ -328,6 +367,7 @@ class _PricingScreenState extends State<PricingScreen> with TickerProviderStateM
                                       getIntervalText: _getIntervalText,
                                       onSubscribe: _subscribe,
                                       onCancel: _cancelSubscription, // ✅ PASSED
+                                      isSubscribing: _isSubscribing,
                                       r: r,
                                       t: t,
                                     ),
@@ -345,6 +385,7 @@ class _PricingScreenState extends State<PricingScreen> with TickerProviderStateM
                                   getIntervalText: _getIntervalText,
                                   onSubscribe: _subscribe,
                                   onCancel: _cancelSubscription, // ✅ PASSED
+                                  isSubscribing: _isSubscribing,
                                   r: r,
                                   t: t,
                                 );
@@ -498,6 +539,144 @@ class _PricingHeader extends StatelessWidget {
   }
 }
 
+// ── Subscription Summary Banner ──────────────────────────────────────────────
+class _SubscriptionSummaryBanner extends StatelessWidget {
+  final Map<String, dynamic> info;
+  final Responsive r;
+  final AppThemeTokens t;
+
+  const _SubscriptionSummaryBanner({required this.info, required this.r, required this.t});
+
+  DateTime? _parseDate(dynamic value) {
+    if (value == null) return null;
+    try {
+      return DateTime.parse(value.toString()).toLocal();
+    } catch (_) {
+      return null;
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final String? plan = info['plan'];
+    final String? status = info['status'];
+    final bool isHospitalLinked = info['is_hospital_linked'] == true;
+    final String? hospitalAdmin = info['hospital_admin'];
+    final DateTime? expiresAt = _parseDate(info['expires_at']);
+    final int used = (info['monthly_predictions_used'] ?? 0) as int;
+    final int limit = (info['prediction_limit'] ?? 0) as int;
+    final bool isPastDue = status == 'past_due';
+    final bool unlimited = limit <= 0;
+
+    final Color accent = isPastDue
+        ? Colors.orange.shade700
+        : (isHospitalLinked ? Colors.blueGrey : AppColors.sageGreen);
+
+    return Container(
+      width: double.infinity,
+      padding: EdgeInsets.all(r.sp(16)),
+      decoration: BoxDecoration(
+        color: accent.withOpacity(0.06),
+        borderRadius: BorderRadius.circular(r.sp(14)),
+        border: Border.all(color: accent.withOpacity(0.25)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(
+                isPastDue ? Icons.warning_amber_rounded : Icons.verified_rounded,
+                color: accent,
+                size: r.sp(18),
+              ),
+              SizedBox(width: r.wp(8)),
+              Expanded(
+                child: Text(
+                  isHospitalLinked
+                      ? 'Hospital-provided access'
+                      : '${(plan ?? 'freemium').toUpperCase()} plan',
+                  style: TextStyle(
+                    fontSize: r.fs(14),
+                    fontWeight: FontWeight.w800,
+                    color: t.textPrimary,
+                  ),
+                ),
+              ),
+              if (status != null && !isHospitalLinked)
+                Container(
+                  padding: EdgeInsets.symmetric(horizontal: r.wp(8), vertical: r.sp(3)),
+                  decoration: BoxDecoration(
+                    color: accent.withOpacity(0.15),
+                    borderRadius: BorderRadius.circular(r.sp(20)),
+                  ),
+                  child: Text(
+                    status[0].toUpperCase() + status.substring(1),
+                    style: TextStyle(
+                      fontSize: r.fs(10),
+                      fontWeight: FontWeight.w700,
+                      color: accent,
+                    ),
+                  ),
+                ),
+            ],
+          ),
+          SizedBox(height: r.sp(8)),
+          if (isHospitalLinked)
+            Text(
+              hospitalAdmin != null
+                  ? 'Your Pro access is managed by $hospitalAdmin. Contact them to make changes.'
+                  : 'Your Pro access is provided by your hospital administrator.',
+              style: TextStyle(fontSize: r.fs(12.5), color: t.textMuted, height: 1.4),
+            )
+          else if (isPastDue)
+            Text(
+              'We couldn\'t process your last payment. Please update your payment method to keep your Pro access.',
+              style: TextStyle(fontSize: r.fs(12.5), color: accent, height: 1.4, fontWeight: FontWeight.w600),
+            )
+          else if (expiresAt != null && plan != null && plan != 'freemium')
+            Text(
+              status == 'active'
+                  ? 'Renews on ${DateFormat('MMM d, yyyy').format(expiresAt)}'
+                  : 'Access ends on ${DateFormat('MMM d, yyyy').format(expiresAt)}',
+              style: TextStyle(fontSize: r.fs(12.5), color: t.textMuted, height: 1.4),
+            ),
+          if (limit > 0 || unlimited) ...[
+            SizedBox(height: r.sp(12)),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text(
+                  'Predictions this month',
+                  style: TextStyle(fontSize: r.fs(11.5), color: t.textMuted, fontWeight: FontWeight.w600),
+                ),
+                Text(
+                  unlimited ? '$used / Unlimited' : '$used / $limit',
+                  style: TextStyle(fontSize: r.fs(11.5), color: t.textPrimary, fontWeight: FontWeight.w700),
+                ),
+              ],
+            ),
+            if (!unlimited) ...[
+              SizedBox(height: r.sp(6)),
+              ClipRRect(
+                borderRadius: BorderRadius.circular(r.sp(4)),
+                child: LinearProgressIndicator(
+                  value: (used / limit).clamp(0.0, 1.0),
+                  minHeight: r.sp(6),
+                  backgroundColor: accent.withOpacity(0.12),
+                  valueColor: AlwaysStoppedAnimation<Color>(
+                    used >= limit ? Colors.red.shade400 : accent,
+                  ),
+                ),
+              ),
+            ],
+          ],
+        ],
+      ),
+    );
+  }
+}
+
 // ── Pricing Card ─────────────────────────────────────────────────────────────
 class _PricingCard extends StatelessWidget {
   final dynamic plan;
@@ -508,6 +687,7 @@ class _PricingCard extends StatelessWidget {
   final String Function(String) getIntervalText;
   final Future<void> Function(String) onSubscribe;
   final Future<void> Function() onCancel; // ✅ ADDED
+  final bool isSubscribing;
   final Responsive r;
   final AppThemeTokens t;
 
@@ -520,6 +700,7 @@ class _PricingCard extends StatelessWidget {
     required this.getIntervalText,
     required this.onSubscribe,
     required this.onCancel, // ✅ ADDED
+    required this.isSubscribing,
     required this.r,
     required this.t,
   });
@@ -815,7 +996,7 @@ if (isCurrentPlan && isPaidPlan)
               SizedBox(
                 width: double.infinity,
                 child: ElevatedButton(
-                  onPressed: () => onSubscribe(plan['name']),
+                  onPressed: isSubscribing ? null : () => onSubscribe(plan['name']),
                   style: ElevatedButton.styleFrom(
                     backgroundColor: isPopular ? Colors.white : AppColors.sageGreen,
                     foregroundColor: isPopular ? AppColors.sageGreen : Colors.white,
@@ -825,13 +1006,22 @@ if (isCurrentPlan && isPaidPlan)
                       borderRadius: BorderRadius.circular(r.sp(12)),
                     ),
                   ),
-                  child: Text(
-                    'Get Started',
-                    style: TextStyle(
-                      fontSize: r.fs(14),
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
+                  child: isSubscribing
+                      ? SizedBox(
+                          height: r.fs(16),
+                          width: r.fs(16),
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            color: isPopular ? AppColors.sageGreen : Colors.white,
+                          ),
+                        )
+                      : Text(
+                          'Get Started',
+                          style: TextStyle(
+                            fontSize: r.fs(14),
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
                 ),
               ),
           ],

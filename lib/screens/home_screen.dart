@@ -13,6 +13,7 @@ import 'chatbot_screen.dart';
 import 'profile_screen.dart';
 import 'patient_screen.dart';
 import '../config/app_config.dart';
+import 'pricing_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -57,19 +58,43 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
         final history = await ApiService.getHistory(token);
         final predictions = history['predictions'] ?? [];
         final today = DateTime.now();
+        bool _isToday(String? rawDate) {
+          if (rawDate == null) return false;
+          try {
+            final d = DateTime.parse(rawDate);
+            return d.year == today.year && d.month == today.month && d.day == today.day;
+          } catch (_) {
+            return false;
+          }
+        }
 
         final patientsResponse = await ApiService.getPatients(token: token);
         final totalPatients = patientsResponse['total'] ?? patientsResponse.length ?? 0;
 
+        // Try to scope "new patients" to today too — fall back to 0 if the
+        // patients endpoint doesn't expose a creation date in this shape.
+        int todayNewPatients = 0;
+        try {
+          final patientList = (patientsResponse['patients'] ?? patientsResponse['results'] ?? patientsResponse) as List;
+          todayNewPatients = patientList.where((p) => _isToday(p['created_at'] ?? p['date_added'])).length;
+        } catch (_) {
+          todayNewPatients = 0;
+        }
+
+        final todayPredictions = predictions.where((p) => _isToday(p['created_at'])).toList();
+        final todayHighRisk = todayPredictions.where((p) => p['risk_category'] == 'high').length;
+
         setState(() {
           _stats = {
             'total_predictions': predictions.length,
-            'high_risk_count': predictions.where((p) => p['risk_category'] == 'high').length,
             'total_patients': totalPatients,
-            'today_count': predictions.where((p) {
-              final d = DateTime.parse(p['created_at']);
-              return d.year == today.year && d.month == today.month && d.day == today.day;
-            }).length,
+            // Today-scoped figures shown on the home banner's floating cards.
+            'today_predictions': todayPredictions.length,
+            'today_new_patients': todayNewPatients,
+            'today_high_risk': todayHighRisk,
+            // kept for backward compatibility with any other callers
+            'high_risk_count': predictions.where((p) => p['risk_category'] == 'high').length,
+            'today_count': todayPredictions.length,
           };
           _recentPredictions = predictions.take(3).toList();
           _isLoading = false;
@@ -108,6 +133,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
   Widget build(BuildContext context) {
     final r = Responsive.of(context);
     final t = AppThemeTokens.of(context);
+    
     final isDesktop = MediaQuery.of(context).size.width >= 850;
 
     if (_pages.isEmpty) {
@@ -699,6 +725,12 @@ class _HomeTabState extends State<_HomeTab> {
   }
 
   Future<void> _requestAssistant(BuildContext context) async {
+    final isPro = _currentSubscriptionPlan == 'pro' || _currentSubscriptionPlan == 'hospital_pro';
+    if (!isPro) {
+      _showUpgradeRequiredDialog(context);
+      return;
+    }
+
     try {
       final token = await TokenService.getToken();
       if (token != null) {
@@ -845,352 +877,491 @@ class _HomeTabState extends State<_HomeTab> {
     ));
   }
 
+  void _showUpgradeRequiredDialog(BuildContext context) {
+    final t = AppThemeTokens.of(context);
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: t.surface,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: Row(
+          children: [
+            Icon(Icons.workspace_premium_rounded, color: AppColors.sageGreen, size: 22),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Text('Pro Feature', style: TextStyle(color: t.textPrimary, fontWeight: FontWeight.w800, fontSize: 16)),
+            ),
+          ],
+        ),
+        content: Text(
+          'Requesting a dedicated assistant is available on the Pro plan. Upgrade to get help managing your patients.',
+          style: TextStyle(color: t.textMuted, fontSize: 14, height: 1.4),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: Text('Not now', style: TextStyle(color: t.textMuted, fontWeight: FontWeight.w600)),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              Navigator.pop(context);
+              Navigator.push(context, MaterialPageRoute(builder: (_) => const PricingScreen()));
+            },
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppColors.sageGreen,
+              foregroundColor: Colors.white,
+              elevation: 0,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+            ),
+            child: const Text('Upgrade to Pro', style: TextStyle(fontWeight: FontWeight.w700)),
+          ),
+        ],
+      ),
+    );
+  }
+
   void _goToProfile(BuildContext context) {
     Navigator.push(context, MaterialPageRoute(builder: (_) => const ProfileScreen()));
   }
 
-  // ── Main build ──────────────────────────────────────────────────────────
-  @override
-  Widget build(BuildContext context) {
-    final r = Responsive.of(context);
-    final t = AppThemeTokens.of(context);
-
-    String? profileImageUrl;
-    if (widget.profilePicture != null && widget.profilePicture!.isNotEmpty) {
-      profileImageUrl = '${AppConfig.baseUrl}${widget.profilePicture}';
-    }
-
-    final isPro = _currentSubscriptionPlan == 'pro' || _currentSubscriptionPlan == 'hospital_pro';
-    final isDesktop = MediaQuery.of(context).size.width >= 850;
-
-    return RefreshIndicator(
-      onRefresh: () async => widget.onRefresh(),
-      color: AppColors.sageGreen,
-      backgroundColor: t.surface,
-      child: SingleChildScrollView(
-        key: const ValueKey('home-tab'),
-        physics: const AlwaysScrollableScrollPhysics(),
-        padding: EdgeInsets.fromLTRB(
-          isDesktop ? 32.0 : r.hp,
-          isDesktop ? 24.0 : r.sp(24),
-          isDesktop ? 32.0 : r.hp,
-          isDesktop ? 40.0 : r.sp(120),
-        ),
-        child: Center(
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 1100),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                _TopHeader(
-                  title: isDesktop ? 'Overview' : 'Heart Alert',
-                  profileImageUrl: profileImageUrl,
-                  onProfileTap: () => _goToProfile(context),
-                  r: r,
-                  hideLogo: isDesktop,
-                  isDesktop: isDesktop,
-                ),
-                SizedBox(height: isDesktop ? 28 : r.sp(28)),
-
-                if (isDesktop)
-                  Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Expanded(
-                        flex: 6,
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            _buildHeroGreetingCard(t, r, profileImageUrl, isDesktop, isPro),
-                            const SizedBox(height: 32),
-                            _buildRecentCasesLayout(t, r, isDesktop),
-                          ],
-                        ),
-                      ),
-                      const SizedBox(width: 28),
-                      Expanded(
-                        flex: 4,
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            _SectionTitle('Today\'s Overview', r, isDesktop: true),
-                            const SizedBox(height: 16),
-                            _buildStatsGrid(isDesktop, r),
-                          ],
-                        ),
-                      ),
-                    ],
-                  )
-                else ...[
-                  _buildHeroGreetingCard(t, r, profileImageUrl, isDesktop, isPro),
-                  SizedBox(height: r.sp(32)),
-                  _SectionTitle('Today\'s Overview', r),
-                  SizedBox(height: r.sp(14)),
-                  _buildStatsGrid(isDesktop, r),
-                  SizedBox(height: r.sp(32)),
-                  _buildRecentCasesLayout(t, r, isDesktop),
-                ],
-              ],
+  // ── Assistant Section ───────────────────────────────────────────────────
+  Widget _buildAssistantSection(BuildContext context, AppThemeTokens t, Responsive r, bool isDesktop, bool isPro) {
+    return FutureBuilder<Map<String, dynamic>>(
+      future: _getAssistantStatus(),
+      builder: (context, snapshot) {
+        if (!snapshot.hasData) {
+          return Container(
+            width: double.infinity,
+            padding: EdgeInsets.all(r.sp(18)),
+            decoration: BoxDecoration(
+              color: t.surface,
+              borderRadius: BorderRadius.circular(r.sp(16)),
+              border: Border.all(color: t.border.withOpacity(0.6)),
             ),
-          ),
-        ),
-      ),
-    );
-  }
+            child: Center(
+              child: SizedBox(
+                height: 20,
+                width: 20,
+                child: CircularProgressIndicator(strokeWidth: 2, color: AppColors.sageGreen),
+              ),
+            ),
+          );
+        }
 
-  // ── Stats Grid ──────────────────────────────────────────────────────────
-  Widget _buildStatsGrid(bool isDesktop, Responsive r) {
-    if (widget.isLoading) {
-      return _StatsLoadingSkeleton(isDesktop: isDesktop, r: r);
-    }
+        final status = snapshot.data!;
+        final hasAssistant = status['has_assistant'] == true;
+        final hasPending = status['has_pending'] == true;
+        final requestId = status['request_id'];
 
-    if (isDesktop) {
-      return Column(
-        children: [
-          _StatCard(title: 'Predictions Today', value: '${widget.stats['today_count'] ?? 0}', icon: Icons.monitor_heart_outlined, color: AppColors.sageGreen, r: r, isDesktop: true),
-          const SizedBox(height: 14),
-          _StatCard(title: 'High Risk Flagged', value: '${widget.stats['high_risk_count'] ?? 0}', icon: Icons.warning_amber_rounded, color: const Color(0xFFC97C5D), r: r, isDesktop: true),
-          const SizedBox(height: 14),
-          _StatCard(title: 'Total Patients', value: '${widget.stats['total_patients'] ?? 0}', icon: Icons.people_outline_rounded, color: const Color(0xFF3B82F6), r: r, isDesktop: true),
-        ],
-      );
-    }
-
-    return Row(
-      children: [
-        Expanded(child: _StatCard(title: 'Predictions', value: '${widget.stats['today_count'] ?? 0}', icon: Icons.monitor_heart_outlined, color: AppColors.sageGreen, r: r)),
-        SizedBox(width: r.wp(10)),
-        Expanded(child: _StatCard(title: 'High Risk', value: '${widget.stats['high_risk_count'] ?? 0}', icon: Icons.warning_amber_rounded, color: const Color(0xFFC97C5D), r: r)),
-        SizedBox(width: r.wp(10)),
-        Expanded(child: _StatCard(title: 'Patients', value: '${widget.stats['total_patients'] ?? 0}', icon: Icons.people_outline_rounded, color: const Color(0xFF3B82F6), r: r)),
-      ],
-    );
-  }
-
-  // ── Hero Greeting Card ──────────────────────────────────────────────────
-  Widget _buildHeroGreetingCard(AppThemeTokens t, Responsive r, String? profileImageUrl, bool isDesktop, bool isPro) {
-    return Container(
-      width: double.infinity,
-      padding: EdgeInsets.all(isDesktop ? 24 : r.sp(22)),
-      decoration: BoxDecoration(
-        gradient: LinearGradient(
-          colors: [
-            AppColors.sageGreen.withOpacity(t.isDark ? 0.18 : 0.13),
-            AppColors.sageGreen.withOpacity(t.isDark ? 0.04 : 0.02),
-          ],
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-        ),
-        borderRadius: BorderRadius.circular(isDesktop ? 22 : r.sp(22)),
-        border: Border.all(color: AppColors.sageGreen.withOpacity(0.15)),
-        boxShadow: [
-          BoxShadow(
-            color: AppColors.sageGreen.withOpacity(0.06),
-            blurRadius: 24,
-            offset: const Offset(0, 8),
-          ),
-        ],
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          // Greeting row
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.center,
+        if (hasAssistant) {
+          return Column(
             children: [
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      _getGreeting(),
-                      style: TextStyle(
-                        color: t.textMuted,
-                        fontSize: isDesktop ? 14 : r.fs(13),
-                        fontWeight: FontWeight.w500,
-                      ),
-                    ),
-                    const SizedBox(height: 4),
-                    Text(
-                      widget.doctorName,
-                      style: TextStyle(
-                        color: t.textPrimary,
-                        fontSize: isDesktop ? 26 : r.fs(24),
-                        fontWeight: FontWeight.w800,
-                        letterSpacing: -0.5,
-                        height: 1.15,
-                      ),
-                    ),
-                    const SizedBox(height: 4),
-                    Text(
-                      '${widget.doctorSpecialty} · ${widget.doctorHospital}',
-                      style: TextStyle(
-                        color: t.textMuted,
-                        fontSize: isDesktop ? 13 : r.fs(12),
-                        height: 1.3,
-                      ),
-                    ),
-                  ],
+              _AssistantBanner(
+                icon: Icons.verified_user_rounded,
+                color: AppColors.sageGreen,
+                title: 'Assistant Assigned',
+                subtitle: 'Your assistant is active and helping manage your patients.',
+              ),
+              _buildStatusTimeline(false, true, context, isDesktop),
+            ],
+          );
+        }
+
+        if (hasPending) {
+          return Column(
+            children: [
+              _AssistantBanner(
+                icon: Icons.hourglass_top_rounded,
+                color: Color(0xFFE65100),
+                title: 'Request Pending',
+                subtitle: 'Admin is reviewing your assistant request.',
+              ),
+              _buildStatusTimeline(true, false, context, isDesktop),
+              SizedBox(height: r.sp(10)),
+              SizedBox(
+                width: double.infinity,
+                child: OutlinedButton(
+                  onPressed: requestId == null ? null : () => _cancelRequest(context, requestId as int),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: Colors.red.shade400,
+                    side: BorderSide(color: Colors.red.shade200),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(r.sp(12))),
+                    padding: EdgeInsets.symmetric(vertical: r.sp(12)),
+                  ),
+                  child: const Text('Cancel Request', style: TextStyle(fontWeight: FontWeight.w700)),
                 ),
               ),
-              const SizedBox(width: 16),
-              // Profile avatar
-              GestureDetector(
-                onTap: () => _goToProfile(context),
-                child: Container(
-                  width: isDesktop ? 64 : r.wp(60),
-                  height: isDesktop ? 64 : r.wp(60),
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    gradient: LinearGradient(
-                      colors: [AppColors.sageGreen, AppColors.sageGreen.withOpacity(0.75)],
-                      begin: Alignment.topLeft,
-                      end: Alignment.bottomRight,
+            ],
+          );
+        }
+
+        // No assistant, no pending request — offer to request one, gated by plan
+        return Container(
+          width: double.infinity,
+          padding: EdgeInsets.all(r.sp(18)),
+          decoration: BoxDecoration(
+            color: t.surface,
+            borderRadius: BorderRadius.circular(r.sp(16)),
+            border: Border.all(color: t.border.withOpacity(0.6)),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Container(
+                    padding: EdgeInsets.all(r.sp(10)),
+                    decoration: BoxDecoration(
+                      color: AppColors.sageGreen.withOpacity(0.1),
+                      borderRadius: BorderRadius.circular(r.sp(12)),
                     ),
-                    boxShadow: [
-                      BoxShadow(
-                        color: AppColors.sageGreen.withOpacity(0.3),
-                        blurRadius: 14,
-                        offset: const Offset(0, 5),
-                      ),
-                    ],
+                    child: Icon(Icons.person_add_alt_1_rounded, color: AppColors.sageGreen, size: r.sp(20)),
                   ),
-                  child: Padding(
-                    padding: const EdgeInsets.all(3),
-                    child: ClipOval(
-                      child: profileImageUrl != null
-                          ? CachedNetworkImage(
-                              imageUrl: profileImageUrl,
-                              fit: BoxFit.cover,
-                              placeholder: (_, __) => Container(color: AppColors.sageGreen.withOpacity(0.2), child: const Icon(Icons.person_rounded, size: 28, color: Colors.white)),
-                              errorWidget: (_, __, ___) => Container(color: AppColors.sageGreen.withOpacity(0.2), child: const Icon(Icons.person_rounded, size: 28, color: Colors.white)),
-                            )
-                          : Container(color: Colors.white.withOpacity(0.15), child: const Icon(Icons.person_rounded, size: 28, color: Colors.white)),
+                  SizedBox(width: r.wp(12)),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text('Need help managing patients?',
+                            style: TextStyle(fontSize: r.fs(14), fontWeight: FontWeight.w700, color: t.textPrimary)),
+                        SizedBox(height: r.sp(2)),
+                        Text(
+                          isPro
+                              ? 'Request an assistant to help with your workflow.'
+                              : 'Upgrade to Pro to request a dedicated assistant.',
+                          style: TextStyle(fontSize: r.fs(12), color: t.textMuted),
+                        ),
+                      ],
                     ),
+                  ),
+                ],
+              ),
+              SizedBox(height: r.sp(16)),
+              SizedBox(
+                width: double.infinity,
+                height: r.sp(46),
+                child: ElevatedButton.icon(
+                  onPressed: () {
+                    if (isPro) {
+                      _requestAssistant(context);
+                    } else {
+                      _showUpgradeRequiredDialog(context);
+                    }
+                  },
+                  icon: Icon(isPro ? Icons.person_add_rounded : Icons.lock_outline_rounded, size: r.sp(16)),
+                  label: Text(
+                    isPro ? 'Request an Assistant' : 'Pro Feature — Upgrade to Unlock',
+                    style: TextStyle(fontSize: r.fs(13.5), fontWeight: FontWeight.w700),
+                  ),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: isPro ? AppColors.sageGreen : t.border.withOpacity(0.5),
+                    foregroundColor: isPro ? Colors.white : t.textMuted,
+                    elevation: 0,
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(r.sp(12))),
                   ),
                 ),
               ),
             ],
           ),
-
-          SizedBox(height: isDesktop ? 22 : r.sp(20)),
-
-          // Action buttons — mobile only (desktop uses sidebar CTA)
-          if (!isDesktop) ...[
-            Wrap(
-              spacing: 10,
-              runSpacing: 10,
-              children: [
-                SizedBox(
-                  width: double.infinity,
-                  height: 48,
-                  child: ElevatedButton.icon(
-                    onPressed: () => context.findAncestorStateOfType<_HomeScreenState>()?.setCurrentIndex(2),
-                    icon: Icon(Icons.add_chart_rounded, size: r.wp(17)),
-                    label: Text('New Prediction', style: TextStyle(fontSize: r.fs(13), fontWeight: FontWeight.w700)),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: AppColors.sageGreen,
-                      foregroundColor: Colors.white,
-                      elevation: 0,
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(13)),
-                    ),
-                  ),
-                ),
-                SizedBox(
-                  width: double.infinity,
-                  height: 48,
-                  child: OutlinedButton.icon(
-                    onPressed: () => context.findAncestorStateOfType<_HomeScreenState>()?.setCurrentIndex(1),
-                    icon: Icon(Icons.folder_open_outlined, size: r.wp(17)),
-                    label: Text('View Patients', style: TextStyle(fontSize: r.fs(13), fontWeight: FontWeight.w700)),
-                    style: OutlinedButton.styleFrom(
-                      foregroundColor: t.textPrimary,
-                      side: BorderSide(color: t.border.withOpacity(0.7)),
-                      backgroundColor: t.surface,
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(13)),
-                    ),
-                  ),
-                ),
-              ],
-            ),
-            SizedBox(height: r.sp(16)),
-          ] else
-            SizedBox(height: 16),
-
-          // Assistant status
-          FutureBuilder<Map<String, dynamic>>(
-            future: _getAssistantStatus(),
-            builder: (context, snapshot) {
-              if (_loadingPlan || !snapshot.hasData) return const SizedBox.shrink();
-
-              final hasAssistant = snapshot.data?['has_assistant'] == true;
-              final hasPending = snapshot.data?['has_pending'] == true;
-              final requestId = snapshot.data?['request_id'];
-
-              if (hasAssistant) {
-                return _AssistantBanner(
-                  icon: Icons.check_circle_rounded,
-                  color: AppColors.sageGreen,
-                  title: 'Assistant assigned',
-                  subtitle: 'Your assistant has been approved and is active.',
-                );
-              }
-
-              if (hasPending) {
-                return Column(
-                  children: [
-                    _AssistantBanner(
-                      icon: Icons.hourglass_top_rounded,
-                      color: const Color(0xFFE65100),
-                      title: 'Request pending approval',
-                      subtitle: 'Admin will review your request shortly.',
-                    ),
-                    _buildStatusTimeline(true, false, context, isDesktop),
-                    if (requestId != null) ...[
-                      SizedBox(height: isDesktop ? 14 : r.sp(14)),
-                      SizedBox(
-                        width: isDesktop ? 180 : double.infinity,
-                        child: OutlinedButton.icon(
-                          onPressed: () => _cancelRequest(context, requestId),
-                          icon: const Icon(Icons.close_rounded, size: 15),
-                          label: const Text('Cancel request', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
-                          style: OutlinedButton.styleFrom(
-                            foregroundColor: Colors.red.shade400,
-                            side: BorderSide(color: Colors.red.shade200),
-                            padding: const EdgeInsets.symmetric(vertical: 12),
-                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                          ),
-                        ),
-                      ),
-                    ],
-                  ],
-                );
-              }
-
-              return SizedBox(
-                width: isDesktop ? 260 : double.infinity,
-                child: OutlinedButton.icon(
-                  onPressed: isPro ? () => _requestAssistant(context) : null,
-                  icon: Icon(Icons.person_add_rounded, size: 17, color: isPro ? AppColors.sageGreen : Colors.grey),
-                  label: Text(
-                    isPro ? 'Request an Assistant' : 'Upgrade to Pro for Assistant',
-                    style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
-                  ),
-                  style: OutlinedButton.styleFrom(
-                    foregroundColor: isPro ? AppColors.sageGreen : Colors.grey,
-                    side: BorderSide(color: (isPro ? AppColors.sageGreen : Colors.grey).withOpacity(0.35)),
-                    padding: const EdgeInsets.symmetric(vertical: 13),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                  ),
-                ),
-              );
-            },
-          ),
-        ],
-      ),
+        );
+      },
     );
   }
 
+  // ── Main build ──────────────────────────────────────────────────────────
+@override
+Widget build(BuildContext context) {
+  final r = Responsive.of(context);
+  final t = AppThemeTokens.of(context);
+  final themeProvider = context.watch<ThemeProvider>();
+  
+  String? profileImageUrl;
+  if (widget.profilePicture != null && widget.profilePicture!.isNotEmpty) {
+    profileImageUrl = '${AppConfig.baseUrl}${widget.profilePicture}';
+  }
+
+  final isPro = _currentSubscriptionPlan == 'pro' || _currentSubscriptionPlan == 'hospital_pro';
+  final isDesktop = MediaQuery.of(context).size.width >= 850;
+
+  return RefreshIndicator(
+    onRefresh: () async => widget.onRefresh(),
+    color: AppColors.sageGreen,
+    backgroundColor: t.surface,
+    child: SingleChildScrollView(
+      key: const ValueKey('home-tab'),
+      physics: const AlwaysScrollableScrollPhysics(),
+      padding: EdgeInsets.fromLTRB(
+        isDesktop ? 32.0 : r.hp,
+        isDesktop ? 24.0 : r.sp(24),
+        isDesktop ? 32.0 : r.hp,
+        isDesktop ? 40.0 : r.sp(120),
+      ),
+      child: Center(
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 1100),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // ── Banner ───────────────────────────────────
+              _buildWarmCardBanner(t, r, profileImageUrl, isDesktop, themeProvider),
+              SizedBox(height: isDesktop ? 20 : r.sp(18)),
+
+              // ── Stats row (simple, no overlap) ────────────
+              _SectionTitle("Today's Overview", r, isDesktop: isDesktop),
+              SizedBox(height: isDesktop ? 14 : r.sp(14)),
+              widget.isLoading
+                  ? _StatsLoadingSkeleton(isDesktop: false, r: r)
+                  : Row(
+                      children: [
+                        Expanded(
+                          child: _FloatingStatCard(
+                            label: 'New Patients',
+                            value: '${widget.stats['today_new_patients'] ?? 0}',
+                            icon: Icons.people_outline_rounded,
+                            color: AppColors.sageGreen,
+                            r: r,
+                            isDesktop: isDesktop,
+                          ),
+                        ),
+                        SizedBox(width: isDesktop ? 12 : r.wp(10)),
+                        Expanded(
+                          child: _FloatingStatCard(
+                            label: 'High Risk',
+                            value: '${widget.stats['today_high_risk'] ?? 0}',
+                            icon: Icons.warning_amber_rounded,
+                            color: const Color(0xFFC97C5D),
+                            r: r,
+                            isDesktop: isDesktop,
+                          ),
+                        ),
+                        SizedBox(width: isDesktop ? 12 : r.wp(10)),
+                        Expanded(
+                          child: _FloatingStatCard(
+                            label: 'Predictions',
+                            value: '${widget.stats['today_predictions'] ?? 0}',
+                            icon: Icons.monitor_heart_outlined,
+                            color: Colors.blue.shade400,
+                            r: r,
+                            isDesktop: isDesktop,
+                          ),
+                        ),
+                      ],
+                    ),
+              SizedBox(height: isDesktop ? 28 : r.sp(28)),
+
+              // ── Assistant ────────────────────────────────
+              _SectionTitle('Assistant', r, isDesktop: isDesktop),
+              SizedBox(height: isDesktop ? 14 : r.sp(14)),
+              _loadingPlan
+                  ? Container(
+                      width: double.infinity,
+                      padding: EdgeInsets.all(r.sp(18)),
+                      decoration: BoxDecoration(
+                        color: t.surface,
+                        borderRadius: BorderRadius.circular(r.sp(16)),
+                        border: Border.all(color: t.border.withOpacity(0.6)),
+                      ),
+                      child: Center(
+                        child: SizedBox(
+                          height: 20,
+                          width: 20,
+                          child: CircularProgressIndicator(strokeWidth: 2, color: AppColors.sageGreen),
+                        ),
+                      ),
+                    )
+                  : _buildAssistantSection(context, t, r, isDesktop, isPro),
+              SizedBox(height: isDesktop ? 28 : r.sp(28)),
+
+              _buildRecentCasesLayout(t, r, isDesktop),
+            ],
+          ),
+        ),
+      ),
+    ),
+  );
+}
+
+// ── Warm Card Banner ────────────────────────────────────────────────────
+Widget _buildWarmCardBanner(
+  AppThemeTokens t,
+  Responsive r,
+  String? profileImageUrl,
+  bool isDesktop,
+  ThemeProvider themeProvider,
+) {
+  return Container(
+    width: double.infinity,
+    padding: EdgeInsets.all(isDesktop ? 24 : r.sp(20)),
+    decoration: BoxDecoration(
+      gradient: t.primaryGradient,
+      borderRadius: BorderRadius.circular(isDesktop ? 24 : r.sp(22)),
+      boxShadow: [
+        BoxShadow(
+          color: AppColors.sageGreen.withOpacity(0.30),
+          blurRadius: 20,
+          offset: const Offset(0, 8),
+        ),
+      ],
+    ),
+    child: Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        // Top row: brand mark + theme toggle
+        Row(
+          children: [
+            Container(
+              width: isDesktop ? 32 : r.wp(28),
+              height: isDesktop ? 32 : r.wp(28),
+              decoration: BoxDecoration(
+                color: Colors.white.withOpacity(0.18),
+                borderRadius: BorderRadius.circular(isDesktop ? 10 : r.sp(9)),
+              ),
+              child: Padding(
+                padding: const EdgeInsets.all(6),
+                child: Image.asset(
+                  'assets/icon/icon.png',
+                  errorBuilder: (_, __, ___) =>
+                      const Icon(Icons.favorite_rounded, color: Colors.white, size: 16),
+                ),
+              ),
+            ),
+            const Spacer(),
+            Container(
+              decoration: BoxDecoration(
+                color: Colors.white.withOpacity(0.16),
+                borderRadius: BorderRadius.circular(11),
+              ),
+              child: IconButton(
+                icon: Icon(
+                  themeProvider.getThemeModeIcon(),
+                  color: Colors.white,
+                  size: 19,
+                ),
+                onPressed: () => themeProvider.toggleTheme(),
+                tooltip: 'Theme: ${themeProvider.getThemeModeLabel()}',
+                style: IconButton.styleFrom(padding: const EdgeInsets.all(8)),
+              ),
+            ),
+          ],
+        ),
+        SizedBox(height: isDesktop ? 20 : r.sp(18)),
+        // Greeting + name + avatar
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: [
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Text(
+                        _getGreeting(),
+                        style: TextStyle(
+                          color: Colors.white.withOpacity(0.78),
+                          fontSize: isDesktop ? 14 : r.fs(13),
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Container(
+                        width: 6,
+                        height: 6,
+                        decoration: BoxDecoration(
+                          color: Colors.white,
+                          shape: BoxShape.circle,
+                          boxShadow: [
+                            BoxShadow(color: Colors.white.withOpacity(0.6), blurRadius: 6),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    widget.doctorName,
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontSize: isDesktop ? 30 : r.fs(26),
+                      fontWeight: FontWeight.w800,
+                      letterSpacing: -0.6,
+                      height: 1.1,
+                    ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  const SizedBox(height: 8),
+                  Row(
+                    children: [
+                      Icon(
+                        Icons.medical_services_outlined,
+                        size: isDesktop ? 14 : r.fs(13),
+                        color: Colors.white.withOpacity(0.85),
+                      ),
+                      const SizedBox(width: 6),
+                      Flexible(
+                        child: Text(
+                          '${widget.doctorSpecialty} · ${widget.doctorHospital}',
+                          style: TextStyle(
+                            color: Colors.white.withOpacity(0.8),
+                            fontSize: isDesktop ? 13 : r.fs(12.5),
+                            height: 1.3,
+                          ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+            SizedBox(width: isDesktop ? 18 : r.wp(14)),
+            // Avatar on the right
+            GestureDetector(
+              onTap: () => _goToProfile(context),
+              child: Container(
+                width: isDesktop ? 64 : r.wp(60),
+                height: isDesktop ? 64 : r.wp(60),
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  border: Border.all(color: Colors.white.withOpacity(0.55), width: 2.5),
+                  boxShadow: [
+                    BoxShadow(color: Colors.black.withOpacity(0.15), blurRadius: 16, offset: const Offset(0, 6)),
+                  ],
+                ),
+                child: Padding(
+                  padding: const EdgeInsets.all(3),
+                  child: ClipOval(
+                    child: profileImageUrl != null
+                        ? CachedNetworkImage(
+                            imageUrl: profileImageUrl,
+                            fit: BoxFit.cover,
+                            placeholder: (_, __) => Container(
+                              color: Colors.white.withOpacity(0.2),
+                              child: const Icon(Icons.person_rounded, size: 28, color: Colors.white),
+                            ),
+                            errorWidget: (_, __, ___) => Container(
+                              color: Colors.white.withOpacity(0.2),
+                              child: const Icon(Icons.person_rounded, size: 28, color: Colors.white),
+                            ),
+                          )
+                        : Container(
+                            color: Colors.white.withOpacity(0.2),
+                            child: const Icon(Icons.person_rounded, size: 28, color: Colors.white),
+                          ),
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ],
+    ),
+  );
+}
+ 
   String _getGreeting() {
     final hour = DateTime.now().hour;
     if (hour < 12) return 'Good morning,';
@@ -1354,7 +1525,7 @@ class _TopHeader extends StatelessWidget {
   final Responsive r;
   final bool hideLogo;
   final bool isDesktop;
-
+final ThemeProvider themeProvider;
   const _TopHeader({
     required this.title,
     required this.profileImageUrl,
@@ -1362,13 +1533,13 @@ class _TopHeader extends StatelessWidget {
     required this.r,
     this.hideLogo = false,
     this.isDesktop = false,
+    required this.themeProvider, // ✅ Add this
+
   });
 
   @override
   Widget build(BuildContext context) {
     final t = AppThemeTokens.of(context);
-    final provider = context.watch<ThemeProvider>();
-
     return Row(
       children: [
         if (!hideLogo) ...[
@@ -1421,15 +1592,15 @@ class _TopHeader extends StatelessWidget {
             border: Border.all(color: t.border.withOpacity(0.5)),
           ),
           child: IconButton(
-            icon: Icon(
-              provider.isDark ? Icons.light_mode_rounded : Icons.dark_mode_rounded,
-              color: t.textPrimary.withOpacity(0.6),
-              size: 20,
-            ),
-            onPressed: () => provider.toggleTheme(),
-            tooltip: 'Toggle Theme',
-            style: IconButton.styleFrom(padding: const EdgeInsets.all(10)),
-          ),
+  icon: Icon(
+    themeProvider.getThemeModeIcon(),
+    color: t.textPrimary.withOpacity(0.6),
+    size: 20,
+  ),
+  onPressed: () => themeProvider.toggleTheme(),
+  tooltip: 'Theme: ${themeProvider.getThemeModeLabel()}',
+  style: IconButton.styleFrom(padding: const EdgeInsets.all(10)),
+),
         ),
         const SizedBox(width: 10),
         // Profile avatar — mobile only (desktop uses sidebar profile item)
@@ -1497,7 +1668,8 @@ class _SectionTitle extends StatelessWidget {
   }
 }
 
-// ─── Stat Card ────────────────────────────────────────────────────────────────
+// In home_screen.dart - Replace _StatCard with this enhanced version
+
 class _StatCard extends StatelessWidget {
   final String title;
   final String value;
@@ -1505,6 +1677,7 @@ class _StatCard extends StatelessWidget {
   final Color color;
   final Responsive r;
   final bool isDesktop;
+  final VoidCallback? onTap;
 
   const _StatCard({
     required this.title,
@@ -1513,107 +1686,126 @@ class _StatCard extends StatelessWidget {
     required this.color,
     required this.r,
     this.isDesktop = false,
+    this.onTap,
   });
 
   @override
   Widget build(BuildContext context) {
     final t = AppThemeTokens.of(context);
+    final isDark = t.isDark;
 
-    // Desktop: compact horizontal row card
-    if (isDesktop) {
-      return Container(
-        padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
+    return GestureDetector(
+      onTap: onTap,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 200),
+        padding: EdgeInsets.all(isDesktop ? 16 : r.sp(14)),
         decoration: BoxDecoration(
-          color: t.card,
-          borderRadius: BorderRadius.circular(14),
-          border: Border.all(color: t.border.withOpacity(0.5)),
-          boxShadow: [BoxShadow(color: t.textPrimary.withOpacity(0.02), blurRadius: 8, offset: const Offset(0, 3))],
-        ),
-        child: Row(
-          children: [
-            Container(
-              width: 36,
-              height: 36,
-              decoration: BoxDecoration(
-                color: color.withOpacity(0.1),
-                borderRadius: BorderRadius.circular(10),
-              ),
-              child: Icon(icon, color: color, size: 18),
-            ),
-            const SizedBox(width: 14),
-            Expanded(
-              child: Text(
-                title,
-                style: TextStyle(color: t.textMuted, fontSize: 13, fontWeight: FontWeight.w500),
-              ),
-            ),
-            Text(
-              value,
-              style: TextStyle(
-                color: t.textPrimary,
-                fontSize: 22,
-                fontWeight: FontWeight.w800,
-                letterSpacing: -0.5,
-                height: 1.0,
-              ),
+          gradient: LinearGradient(
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+            colors: [
+              color.withOpacity(isDark ? 0.15 : 0.08),
+              color.withOpacity(isDark ? 0.05 : 0.02),
+            ],
+          ),
+          borderRadius: BorderRadius.circular(isDesktop ? 16 : r.sp(16)),
+          border: Border.all(
+            color: color.withOpacity(isDark ? 0.2 : 0.15),
+            width: 1,
+          ),
+          boxShadow: [
+            BoxShadow(
+              color: color.withOpacity(0.08),
+              blurRadius: 12,
+              offset: const Offset(0, 4),
             ),
           ],
         ),
-      );
-    }
-
-    // Mobile: compact card — icon top-left, value top-right, label below
-    return Container(
-      padding: EdgeInsets.symmetric(horizontal: r.sp(12), vertical: r.sp(12)),
-      decoration: BoxDecoration(
-        color: t.card,
-        borderRadius: BorderRadius.circular(r.sp(16)),
-        border: Border.all(color: t.border.withOpacity(0.5)),
-        boxShadow: [BoxShadow(color: t.textPrimary.withOpacity(0.025), blurRadius: 8, offset: const Offset(0, 3))],
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Container(
-                padding: EdgeInsets.all(r.sp(6)),
-                decoration: BoxDecoration(
-                  color: color.withOpacity(0.1),
-                  borderRadius: BorderRadius.circular(r.sp(8)),
-                ),
-                child: Icon(icon, color: color, size: r.wp(14)),
+        child: isDesktop
+            ? Row(
+                children: [
+                  _buildIcon(color),
+                  const SizedBox(width: 14),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          value,
+                          style: TextStyle(
+                            fontSize: 24,
+                            fontWeight: FontWeight.w800,
+                            color: t.textPrimary,
+                            letterSpacing: -0.5,
+                          ),
+                        ),
+                        Text(
+                          title,
+                          style: TextStyle(
+                            fontSize: 13,
+                            color: t.textMuted,
+                            fontWeight: FontWeight.w500,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  Icon(
+                    Icons.arrow_forward_ios_rounded,
+                    size: 14,
+                    color: t.textMuted.withOpacity(0.5),
+                  ),
+                ],
+              )
+            : Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      _buildIcon(color),
+                      Text(
+                        value,
+                        style: TextStyle(
+                          color: t.textPrimary,
+                          fontSize: r.fs(24),
+                          fontWeight: FontWeight.w800,
+                          letterSpacing: -0.5,
+                          height: 1.0,
+                        ),
+                      ),
+                    ],
+                  ),
+                  SizedBox(height: r.sp(8)),
+                  Text(
+                    title,
+                    style: TextStyle(
+                      color: t.textMuted,
+                      fontSize: r.fs(10),
+                      fontWeight: FontWeight.w500,
+                      height: 1.2,
+                    ),
+                  ),
+                ],
               ),
-              Text(
-                value,
-                style: TextStyle(
-                  color: t.textPrimary,
-                  fontSize: r.fs(22),
-                  fontWeight: FontWeight.w800,
-                  letterSpacing: -0.5,
-                  height: 1.0,
-                ),
-              ),
-            ],
-          ),
-          SizedBox(height: r.sp(8)),
-          Text(
-            title,
-            style: TextStyle(
-              color: t.textMuted,
-              fontSize: r.fs(10),
-              fontWeight: FontWeight.w500,
-              height: 1.2,
-            ),
-          ),
-        ],
       ),
     );
   }
+
+  Widget _buildIcon(Color color) {
+    return Container(
+      padding: const EdgeInsets.all(8),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.12),
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: Icon(icon, color: color, size: 20),
+    );
+  }
 }
+
 
 // ─── Patient Preview Card ─────────────────────────────────────────────────────
 class _PatientPreviewCard extends StatelessWidget {
@@ -1826,6 +2018,56 @@ class _StatsLoadingSkeletonState extends State<_StatsLoadingSkeleton>
   }
 }
 
+
+// Quick Action Chip Widget
+class _QuickActionChip extends StatelessWidget {
+  final String label;
+  final IconData icon;
+  final Color color;
+  final VoidCallback onTap;
+  final Responsive r;
+
+  const _QuickActionChip({
+    required this.label,
+    required this.icon,
+    required this.color,
+    required this.onTap,
+    required this.r,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        padding: EdgeInsets.symmetric(horizontal: r.wp(14), vertical: r.sp(8)),
+        decoration: BoxDecoration(
+          color: color.withOpacity(0.08),
+          borderRadius: BorderRadius.circular(r.sp(12)),
+          border: Border.all(color: color.withOpacity(0.15)),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, size: r.wp(14), color: color),
+            SizedBox(width: r.wp(6)),
+            Text(
+              label,
+              style: TextStyle(
+                fontSize: r.fs(11),
+                fontWeight: FontWeight.w600,
+                color: color,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+
+
 class _CasesLoadingSkeleton extends StatefulWidget {
   final Responsive r;
   final AppThemeTokens t;
@@ -2005,6 +2247,147 @@ class _NavItem extends StatelessWidget {
     );
   }
 }
+
+// ─── Simple Stat Item ─────────────────────────────────────────────────────────
+// ─── Floating Stat Card (Warm Card banner) ────────────────────────────────────
+// Elevated card designed to sit half on/half off the bottom edge of the
+// gradient banner — opaque surface + real shadow so it visually "floats".
+class _FloatingStatCard extends StatelessWidget {
+  final String label;
+  final String value;
+  final IconData icon;
+  final Color color;
+  final Responsive r;
+  final bool isDesktop;
+
+  const _FloatingStatCard({
+    required this.label,
+    required this.value,
+    required this.icon,
+    required this.color,
+    required this.r,
+    this.isDesktop = false,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final t = AppThemeTokens.of(context);
+    return Container(
+      padding: EdgeInsets.symmetric(
+        vertical: isDesktop ? 14 : r.sp(13),
+        horizontal: isDesktop ? 12 : r.sp(8),
+      ),
+      decoration: BoxDecoration(
+        color: t.card,
+        borderRadius: BorderRadius.circular(isDesktop ? 16 : r.sp(16)),
+        border: Border.all(color: t.border.withOpacity(0.4)),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(t.isDark ? 0.35 : 0.10),
+            blurRadius: 16,
+            offset: const Offset(0, 6),
+          ),
+        ],
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            width: isDesktop ? 28 : r.sp(26),
+            height: isDesktop ? 28 : r.sp(26),
+            decoration: BoxDecoration(
+              color: color.withOpacity(0.12),
+              borderRadius: BorderRadius.circular(isDesktop ? 9 : r.sp(8)),
+            ),
+            child: Icon(icon, size: isDesktop ? 15 : r.sp(14), color: color),
+          ),
+          SizedBox(height: isDesktop ? 6 : r.sp(6)),
+          Text(
+            value,
+            style: TextStyle(
+              fontSize: isDesktop ? 17 : r.fs(16),
+              fontWeight: FontWeight.w800,
+              color: t.textPrimary,
+              height: 1.0,
+            ),
+          ),
+          const SizedBox(height: 2),
+          Text(
+            label,
+            textAlign: TextAlign.center,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(
+              fontSize: isDesktop ? 10.5 : r.fs(9.5),
+              color: t.textMuted,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _SimpleStatItem extends StatelessWidget {
+  final String label;
+  final String value;
+  final IconData icon;
+  final Color color;
+  final Responsive r;
+
+  const _SimpleStatItem({
+    required this.label,
+    required this.value,
+    required this.icon,
+    required this.color,
+    required this.r,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final t = AppThemeTokens.of(context);
+    return Expanded(
+      child: Container(
+        padding: EdgeInsets.symmetric(vertical: r.sp(12), horizontal: r.sp(10)),
+        decoration: BoxDecoration(
+          color: t.card.withOpacity(0.5),
+          borderRadius: BorderRadius.circular(r.sp(12)),
+          border: Border.all(color: t.border.withOpacity(0.3)),
+        ),
+        child: Column(
+          children: [
+            Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Icon(icon, size: r.sp(14), color: color),
+                const SizedBox(width: 6),
+                Text(
+                  value,
+                  style: TextStyle(
+                    fontSize: r.fs(18),
+                    fontWeight: FontWeight.w800,
+                    color: t.textPrimary,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 2),
+            Text(
+              label,
+              style: TextStyle(
+                fontSize: r.fs(10),
+                color: t.textMuted,
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 
 // ─── Center Predict Button (Mobile) ──────────────────────────────────────────
 class _CenterPredictButton extends StatelessWidget {

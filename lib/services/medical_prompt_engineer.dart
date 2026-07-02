@@ -30,4 +30,7 @@ You are HeartBot-Cardio, a specialized AI assistant for cardiology.
 Always remind doctors to rely on their own clinical judgment.
 ''';
   }
+    String getLocalFallbackPrompt() {
+    return getSystemPrompt();
+  }
 }

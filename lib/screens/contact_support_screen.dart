@@ -1,10 +1,8 @@
 // contact_support_screen.dart
 import 'package:flutter/material.dart';
-import 'package:provider/provider.dart';
 import '../services/api_service.dart';
 import '../services/token_service.dart';
 import '../theme/app_theme.dart';
-import '../theme/theme_provider.dart'; // Added to unify the theme
 
 class ContactSupportScreen extends StatefulWidget {
   const ContactSupportScreen({super.key});
@@ -14,13 +12,13 @@ class ContactSupportScreen extends StatefulWidget {
 }
 
 class _ContactSupportScreenState extends State<ContactSupportScreen> {
-  final _nameCtrl = TextEditingController();
-  final _emailCtrl = TextEditingController();
+  final _nameCtrl    = TextEditingController();
+  final _emailCtrl   = TextEditingController();
   final _subjectCtrl = TextEditingController();
   final _messageCtrl = TextEditingController();
-  final _formKey = GlobalKey<FormState>();
+  final _formKey     = GlobalKey<FormState>();
   bool _isLoading = false;
-  bool _isSent = false;
+  bool _isSent    = false;
 
   @override
   void initState() {
@@ -28,36 +26,49 @@ class _ContactSupportScreenState extends State<ContactSupportScreen> {
     _loadUserInfo();
   }
 
+  @override
+  void dispose() {
+    _nameCtrl.dispose();
+    _emailCtrl.dispose();
+    _subjectCtrl.dispose();
+    _messageCtrl.dispose();
+    super.dispose();
+  }
+
   Future<void> _loadUserInfo() async {
     final user = await TokenService.getUser();
-    if (user != null) {
-      _nameCtrl.text = '${user.firstName} ${user.lastName}';
-      _emailCtrl.text = user.email;
+    if (user != null && mounted) {
+      setState(() {
+        _nameCtrl.text  = '${user.firstName} ${user.lastName}';
+        _emailCtrl.text = user.email;
+      });
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    // Utilizing your theme tokens to ensure it looks great in dark/light mode
     final t = AppThemeTokens.of(context);
 
-    return Scaffold(
-      backgroundColor: t.bg,
-      appBar: AppBar(
-        title: const Text('Contact Support'),
-        backgroundColor: Colors.transparent,
-        elevation: 0,
-        foregroundColor: t.textPrimary,
-        centerTitle: true,
+    return GestureDetector(
+      onTap: () => FocusScope.of(context).unfocus(),
+      child: Scaffold(
+        backgroundColor: t.bg,
+        appBar: AppBar(
+          title: const Text('Contact Support'),
+          backgroundColor: Colors.transparent,
+          elevation: 0,
+          foregroundColor: t.textPrimary,
+          centerTitle: true,
+        ),
+        body: _isSent ? _buildSuccessScreen(t) : _buildForm(t),
       ),
-      body: _isSent ? _buildSuccessScreen(t) : _buildForm(t),
     );
   }
 
   Widget _buildForm(AppThemeTokens t) {
     return Center(
       child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 600), // Prevents wide stretching on Web
+        constraints: const BoxConstraints(maxWidth: 600),
         child: SingleChildScrollView(
           padding: const EdgeInsets.all(24),
           physics: const BouncingScrollPhysics(),
@@ -65,33 +76,32 @@ class _ContactSupportScreenState extends State<ContactSupportScreen> {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Container(
-                padding: const EdgeInsets.all(20),
+                padding: const EdgeInsets.all(24),
                 decoration: BoxDecoration(
-                  color: t.card.withOpacity(t.isDark ? 1.0 : 0.8),
+                  color: t.card,
                   borderRadius: BorderRadius.circular(20),
                   border: Border.all(color: t.border),
-                  boxShadow: [
-                    BoxShadow(
-                      color: Colors.black.withOpacity(0.03),
-                      blurRadius: 10,
-                      offset: const Offset(0, 4),
-                    ),
-                  ],
+                  boxShadow: t.cardShadow,
                 ),
                 child: Form(
                   key: _formKey,
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
+                      // ── Header ──────────────────────────────
                       Row(
                         children: [
                           Container(
                             padding: const EdgeInsets.all(12),
                             decoration: BoxDecoration(
-                              color: AppColors.sageGreen.withOpacity(0.15),
+                              color: t.accent.withOpacity(0.15),
                               borderRadius: BorderRadius.circular(14),
                             ),
-                            child: const Icon(Icons.support_agent_rounded, color: AppColors.sageGreen, size: 28),
+                            child: Icon(
+                              Icons.support_agent_rounded,
+                              color: t.accent,
+                              size: 28,
+                            ),
                           ),
                           const SizedBox(width: 16),
                           Expanded(
@@ -100,7 +110,11 @@ class _ContactSupportScreenState extends State<ContactSupportScreen> {
                               children: [
                                 Text(
                                   'How can we help?',
-                                  style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: t.textPrimary),
+                                  style: TextStyle(
+                                    fontSize: 22,
+                                    fontWeight: FontWeight.bold,
+                                    color: t.textPrimary,
+                                  ),
                                 ),
                                 const SizedBox(height: 4),
                                 Text(
@@ -113,8 +127,9 @@ class _ContactSupportScreenState extends State<ContactSupportScreen> {
                         ],
                       ),
                       const SizedBox(height: 32),
-                      
-                      _buildModernTextField(
+
+                      // ── Fields ──────────────────────────────
+                      _buildField(
                         controller: _nameCtrl,
                         label: 'Full Name',
                         icon: Icons.person_outline,
@@ -122,8 +137,8 @@ class _ContactSupportScreenState extends State<ContactSupportScreen> {
                         validator: (v) => v == null || v.isEmpty ? 'Enter your name' : null,
                       ),
                       const SizedBox(height: 16),
-                      
-                      _buildModernTextField(
+
+                      _buildField(
                         controller: _emailCtrl,
                         label: 'Email Address',
                         icon: Icons.email_outlined,
@@ -136,8 +151,8 @@ class _ContactSupportScreenState extends State<ContactSupportScreen> {
                         },
                       ),
                       const SizedBox(height: 16),
-                      
-                      _buildModernTextField(
+
+                      _buildField(
                         controller: _subjectCtrl,
                         label: 'Subject',
                         icon: Icons.short_text_rounded,
@@ -145,8 +160,8 @@ class _ContactSupportScreenState extends State<ContactSupportScreen> {
                         validator: (v) => v == null || v.isEmpty ? 'Enter a subject' : null,
                       ),
                       const SizedBox(height: 16),
-                      
-                      _buildModernTextField(
+
+                      _buildField(
                         controller: _messageCtrl,
                         label: 'Message',
                         icon: Icons.message_outlined,
@@ -155,14 +170,15 @@ class _ContactSupportScreenState extends State<ContactSupportScreen> {
                         validator: (v) => v == null || v.isEmpty ? 'Enter your message' : null,
                       ),
                       const SizedBox(height: 32),
-                      
+
+                      // ── Submit button ───────────────────────
                       SizedBox(
                         width: double.infinity,
                         height: 54,
                         child: ElevatedButton(
                           onPressed: _isLoading ? null : _submitTicket,
                           style: ElevatedButton.styleFrom(
-                            backgroundColor: AppColors.sageGreen,
+                            backgroundColor: t.accent,
                             foregroundColor: Colors.white,
                             elevation: 0,
                             shape: RoundedRectangleBorder(
@@ -171,9 +187,17 @@ class _ContactSupportScreenState extends State<ContactSupportScreen> {
                           ),
                           child: _isLoading
                               ? const SizedBox(
-                                  width: 24, height: 24, 
-                                  child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2.5))
-                              : const Text('Send Message', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+                                  width: 22,
+                                  height: 22,
+                                  child: CircularProgressIndicator(
+                                    color: Colors.white,
+                                    strokeWidth: 2.5,
+                                  ),
+                                )
+                              : const Text(
+                                  'Send Message',
+                                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                                ),
                         ),
                       ),
                     ],
@@ -187,7 +211,7 @@ class _ContactSupportScreenState extends State<ContactSupportScreen> {
     );
   }
 
-  Widget _buildModernTextField({
+  Widget _buildField({
     required TextEditingController controller,
     required String label,
     required IconData icon,
@@ -196,12 +220,19 @@ class _ContactSupportScreenState extends State<ContactSupportScreen> {
     int maxLines = 1,
     String? Function(String?)? validator,
   }) {
+    final isMultiline = maxLines > 1;
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Text(
           label,
-          style: TextStyle(color: t.textMuted, fontSize: 13, fontWeight: FontWeight.w600, letterSpacing: 0.3),
+          style: TextStyle(
+            color: t.textMuted,
+            fontSize: 13,
+            fontWeight: FontWeight.w600,
+            letterSpacing: 0.3,
+          ),
         ),
         const SizedBox(height: 8),
         TextFormField(
@@ -211,12 +242,16 @@ class _ContactSupportScreenState extends State<ContactSupportScreen> {
           style: TextStyle(color: t.textPrimary),
           validator: validator,
           decoration: InputDecoration(
-            prefixIcon: maxLines == 1 
-                ? Icon(icon, color: AppColors.sageGreen, size: 20) 
-                : Padding(
-                    padding: const EdgeInsets.only(bottom: 80.0), // Align icon to top for multiline
-                    child: Icon(icon, color: AppColors.sageGreen, size: 20),
-                  ),
+            prefixIcon: isMultiline
+                ? Align(
+                    alignment: Alignment.topCenter,
+                    heightFactor: 1,
+                    child: Padding(
+                      padding: const EdgeInsets.only(top: 14),
+                      child: Icon(icon, color: t.accent, size: 20),
+                    ),
+                  )
+                : Icon(icon, color: t.accent, size: 20),
             filled: true,
             fillColor: t.bg,
             border: OutlineInputBorder(
@@ -229,15 +264,15 @@ class _ContactSupportScreenState extends State<ContactSupportScreen> {
             ),
             focusedBorder: OutlineInputBorder(
               borderRadius: BorderRadius.circular(14),
-              borderSide: const BorderSide(color: AppColors.sageGreen, width: 1.5),
+              borderSide: BorderSide(color: t.accent, width: 1.5),
             ),
             errorBorder: OutlineInputBorder(
               borderRadius: BorderRadius.circular(14),
-              borderSide: BorderSide(color: Colors.red.shade300, width: 1),
+              borderSide: BorderSide(color: t.danger, width: 1),
             ),
             focusedErrorBorder: OutlineInputBorder(
               borderRadius: BorderRadius.circular(14),
-              borderSide: const BorderSide(color: Colors.red, width: 1.5),
+              borderSide: BorderSide(color: t.danger, width: 1.5),
             ),
           ),
         ),
@@ -255,17 +290,25 @@ class _ContactSupportScreenState extends State<ContactSupportScreen> {
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
               Container(
-                padding: const EdgeInsets.all(20),
+                padding: const EdgeInsets.all(24),
                 decoration: BoxDecoration(
-                  color: Colors.green.withOpacity(0.1),
+                  color: t.successBg,
                   shape: BoxShape.circle,
                 ),
-                child: const Icon(Icons.check_circle_rounded, size: 80, color: Colors.green),
+                child: Icon(
+                  Icons.check_circle_rounded,
+                  size: 56,
+                  color: t.success,
+                ),
               ),
               const SizedBox(height: 32),
               Text(
                 'Message Sent!',
-                style: TextStyle(fontSize: 28, fontWeight: FontWeight.bold, color: t.textPrimary),
+                style: TextStyle(
+                  fontSize: 28,
+                  fontWeight: FontWeight.bold,
+                  color: t.textPrimary,
+                ),
               ),
               const SizedBox(height: 16),
               Text(
@@ -288,7 +331,10 @@ class _ContactSupportScreenState extends State<ContactSupportScreen> {
                       side: BorderSide(color: t.border),
                     ),
                   ),
-                  child: const Text('Back to Profile', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+                  child: const Text(
+                    'Back to Profile',
+                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                  ),
                 ),
               ),
             ],
@@ -300,23 +346,29 @@ class _ContactSupportScreenState extends State<ContactSupportScreen> {
 
   Future<void> _submitTicket() async {
     if (!_formKey.currentState!.validate()) return;
-    
+
     setState(() => _isLoading = true);
-    
+
     try {
       await ApiService.createSupportTicket(
-        name: _nameCtrl.text.trim(),
-        email: _emailCtrl.text.trim(),
+        name:    _nameCtrl.text.trim(),
+        email:   _emailCtrl.text.trim(),
         subject: _subjectCtrl.text.trim(),
         message: _messageCtrl.text.trim(),
       );
-      setState(() => _isSent = true);
+      if (mounted) setState(() => _isSent = true);
     } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Error: $e'), backgroundColor: Colors.red.shade400),
-      );
+      if (mounted) {
+        final t = AppThemeTokens.of(context);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error: $e'),
+            backgroundColor: t.danger,
+          ),
+        );
+      }
     } finally {
-      setState(() => _isLoading = false);
+      if (mounted) setState(() => _isLoading = false);
     }
   }
 }

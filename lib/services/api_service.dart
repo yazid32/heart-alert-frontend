@@ -2,11 +2,16 @@ import 'dart:convert';
 import 'dart:io';
 import 'package:http/http.dart' as http;
 import 'package:http_parser/http_parser.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../config/app_config.dart';
 
 class ApiService {
   static String get baseUrl => AppConfig.baseUrl;
-  
+  // Add to ApiService class
+  static Future<void> clearAuthToken() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove('auth_token');
+  }
   // Signup
   static Future<Map<String, dynamic>> signup({
     required String email,
@@ -1155,7 +1160,6 @@ static Future<Map<String, dynamic>> removeHospitalDoctor({
   }
 }
 
-
 // hospital part
 // Add to api_service.dart
 static Future<List<Map<String, dynamic>>> getHospitalDoctors(String token) async {
@@ -1291,4 +1295,6 @@ static Future<Map<String, dynamic>> cancelSubscription(String token) async {
     throw Exception('Failed to cancel subscription');
   }
 }
+
+
 }
